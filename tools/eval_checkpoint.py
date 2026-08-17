@@ -19,10 +19,12 @@ Nhãn rỗng (trang trắng) không tính được CER — mẫu số bằng 0 �
 tách ra chấm bằng exact-match.
 """
 import argparse
+import base64
 import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 try:                                   # C++, nhanh hơn ~100x
     from rapidfuzz.distance import Levenshtein
@@ -51,44 +53,19 @@ def bucket(path):
     return parts[-3] if len(parts) >= 3 else "?"
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--processor", default=None, help="mặc định: giống --model")
-    ap.add_argument("--data", required=True, help="JSONL dạng --flat")
-    ap.add_argument("--out", default=None, help="ghi từng mẫu ra JSONL để soi mắt")
-    ap.add_argument("--limit", type=int, default=0, help="chỉ chấm N mẫu ĐẦU tiên")
-    ap.add_argument("--sample", type=int, default=0,
-                    help="chấm N mẫu rải đều cả file. Dùng cái này thay --limit khi "
-                         "muốn tập con đại diện: JSONL được ghi lần lượt theo từng "
-                         "config nên N mẫu đầu sẽ toàn GCN")
-    ap.add_argument("--max-new-tokens", type=int, default=4096)
-    ap.add_argument("--repetition-penalty", type=float, default=1.08)
-    ap.add_argument("--attn", default="flash_attention_2")
-    args = ap.parse_args()
-
+def make_local_generator(args):
+    """Load model tại chỗ, sinh tuần tự batch 1."""
     import torch
     from PIL import Image
     from transformers import AutoProcessor, HunYuanVLForConditionalGeneration
 
-    rows = [json.loads(x) for x in open(args.data, encoding="utf-8") if x.strip()]
-    if args.sample and args.sample < len(rows):
-        step = len(rows) / args.sample
-        rows = [rows[int(i * step)] for i in range(args.sample)]
-    elif args.limit:
-        rows = rows[: args.limit]
-    print(f"{len(rows)} mẫu | model {args.model}")
-
     processor = AutoProcessor.from_pretrained(args.processor or args.model)
-    model = HunYuanVLForConditionalGeneration.from_pretrained(
-        args.model, dtype=torch.bfloat16, attn_implementation=args.attn
-    ).eval().cuda()
+    model = (HunYuanVLForConditionalGeneration
+             .from_pretrained(args.model, dtype=torch.bfloat16,
+                              attn_implementation=args.attn)
+             .eval().cuda())
 
-    fh = open(args.out, "w", encoding="utf-8") if args.out else None
-    stats, empty_ok, empty_n = {}, 0, 0
-    t0 = time.time()
-
-    for i, r in enumerate(rows, 1):
+    def generate(r):
         with Image.open(r["image"]) as raw:
             image = raw.convert("RGB")
         messages = [
@@ -106,8 +83,98 @@ def main():
                                  repetition_penalty=args.repetition_penalty,
                                  use_cache=True)
         gen = out[0][inputs["input_ids"].shape[1]:]
-        hyp = processor.decode(gen, skip_special_tokens=True,
-                               clean_up_tokenization_spaces=False).strip("\n")
+        return processor.decode(gen, skip_special_tokens=True,
+                                clean_up_tokenization_spaces=False).strip("\n")
+
+    return generate
+
+
+def make_server_generator(args):
+    """Gửi tới endpoint OpenAI-compatible của vLLM. Ảnh nhúng dạng data URL."""
+    import requests
+
+    url = args.server.rstrip("/") + "/chat/completions"
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+    def generate(r):
+        ext = os.path.splitext(r["image"])[1].lower()
+        with open(r["image"], "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode()
+        payload = {
+            "model": args.served_name,
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{mime.get(ext, 'image/jpeg')};base64,{b64}"}},
+                {"type": "text", "text": r["question"]},
+            ]}],
+            "temperature": 0.0,
+            "max_tokens": args.max_new_tokens,
+            # vLLM nhận tham số sampling ngoài chuẩn OpenAI ở ngay cấp cao nhất.
+            # `extra_body` là khái niệm của client OpenAI, POST JSON thô mà bọc
+            # vào đó thì server bỏ qua.
+            "repetition_penalty": args.repetition_penalty,
+        }
+        resp = requests.post(url, json=payload, timeout=1800)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip("\n")
+
+    return generate
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default=None, help="thư mục model (chế độ tại chỗ)")
+    ap.add_argument("--processor", default=None, help="mặc định: giống --model")
+    ap.add_argument("--data", required=True, help="JSONL dạng --flat")
+    ap.add_argument("--out", default=None, help="ghi từng mẫu ra JSONL để soi mắt")
+    ap.add_argument("--limit", type=int, default=0, help="chỉ chấm N mẫu ĐẦU tiên")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="chấm N mẫu rải đều cả file. Dùng cái này thay --limit khi "
+                         "muốn tập con đại diện: JSONL được ghi lần lượt theo từng "
+                         "config nên N mẫu đầu sẽ toàn GCN")
+    ap.add_argument("--max-new-tokens", type=int, default=4096)
+    ap.add_argument("--repetition-penalty", type=float, default=1.08)
+    ap.add_argument("--attn", default="flash_attention_2")
+    ap.add_argument("--server", default=None,
+                    help="URL vLLM OpenAI-compatible, vd http://127.0.0.1:8000/v1 . "
+                         "Có cờ này thì không load model tại chỗ, gửi request song song "
+                         "— nhanh hơn nhiều lần nhờ continuous batching")
+    ap.add_argument("--served-name", default="tencent/HunyuanOCR",
+                    help="--served-model-name lúc vllm serve")
+    ap.add_argument("--concurrency", type=int, default=16)
+    args = ap.parse_args()
+    if not args.server and not args.model:
+        ap.error("cần --model (chạy tại chỗ) hoặc --server (qua vLLM)")
+
+    rows = [json.loads(x) for x in open(args.data, encoding="utf-8") if x.strip()]
+    if args.sample and args.sample < len(rows):
+        step = len(rows) / args.sample
+        rows = [rows[int(i * step)] for i in range(args.sample)]
+    elif args.limit:
+        rows = rows[: args.limit]
+    print(f"{len(rows)} mẫu | {'server ' + args.server if args.server else 'model ' + args.model}")
+
+    if args.server:
+        generate = make_server_generator(args)
+    else:
+        generate = make_local_generator(args)
+
+    fh = open(args.out, "w", encoding="utf-8") if args.out else None
+    stats, empty_ok, empty_n = {}, 0, 0
+    t0 = time.time()
+
+    if args.server:
+        with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+            hyps = list(ex.map(generate, rows))
+    else:
+        hyps = []
+        for i, r in enumerate(rows, 1):
+            hyps.append(generate(r))
+            if i % 10 == 0 or i == len(rows):
+                print(f"  {i}/{len(rows)}  ({time.time() - t0:.0f}s)", flush=True)
+    print(f"  sinh xong {len(rows)} mẫu trong {time.time() - t0:.0f}s")
+
+    for r, hyp in zip(rows, hyps):
         ref = r["answer"].strip("\n")
 
         rec = {"image": r["image"], "bucket": bucket(r["image"]), "ref": ref, "hyp": hyp}
@@ -129,8 +196,6 @@ def main():
             rec["cer"] = round(d_c / len(ref), 4)
         if fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        if i % 10 == 0 or i == len(rows):
-            print(f"  {i}/{len(rows)}  ({time.time() - t0:.0f}s)", flush=True)
 
     if fh:
         fh.close()
