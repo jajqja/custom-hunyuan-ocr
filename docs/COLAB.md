@@ -239,6 +239,12 @@ Ra 1.007 dòng train / 120 dòng validation, `thiếu ảnh` phải là 0.
 một bản processor riêng. Bước này mất 10–20 phút vì phải mở từng ảnh để đếm
 vision token.
 
+> Thấy `[ERROR] /bin/python` nghĩa là `$VENV` rỗng — biến Python đó không còn
+> trong namespace của kernel (thường vì kernel đã restart, hoặc bạn chưa chạy
+> cell **Cấu hình**). IPython không thay thế được thì shell nhận biến rỗng và
+> ghép ra `/bin/python`. Chạy lại cell Cấu hình, hoặc gõ thẳng
+> `/content/venv/bin/python`.
+>
 > Viết `$PACK_LEN` **không có ngoặc nhọn**. Trong dòng `!` của IPython, `{...}`
 > là cú pháp nội suy biểu thức Python, nên `${PACK_LEN}` thành `$` + `16384`;
 > shell đọc `$1` là tham số vị trí (rỗng) và bạn nhận được
