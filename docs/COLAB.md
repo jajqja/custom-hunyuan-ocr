@@ -262,7 +262,22 @@ print(f"{n} pack, trung bình {t/n:.0f} token/pack")
 
 ## 7. Train
 
-Chạy đồng bộ Drive ở nền trước (mỗi 10 phút, chỉ giữ checkpoint mới nhất):
+Cấu hình đã chạy thật trên A100-80GB (transformers 5.15, torch 2.10):
+
+```bash
+!PYTHON=/content/venv/bin/python \
+ TORCHRUN=/content/venv/bin/torchrun \
+ MODEL_PATH=/content/HunyuanOCR \
+ TRAIN_DATA=/content/hyocr/data/flat/train.jsonl \
+ PACKING=0 \
+ GRAD_ACCUM=16 \
+ PACK_LEN=16384 \
+ RUN_NAME=colab_run \
+ SAVE_STEPS=25 \
+     bash scripts/sft_base_1gpu.sh
+```
+
+315 step (1.007 mẫu / 16 accum × 5 epoch). Chạy đồng bộ Drive ở nền trước đó:
 
 ```python
 import subprocess
@@ -272,27 +287,24 @@ subprocess.Popen(
     shell=True)
 ```
 
-```bash
-!PYTHON=$VENV/bin/python \
- TORCHRUN=$VENV/bin/torchrun \
- MODEL_PATH=/content/HunyuanOCR \
- TRAIN_DATA=/content/hyocr/data/packed/train_$PACK_LEN.jsonl \
- PACK_LEN=$PACK_LEN \
- RUN_NAME=colab_run \
- SAVE_STEPS=25 \
-     bash scripts/sft_base_1gpu.sh
-```
+`TRAIN_DATA` là JSONL `--flat`, **không** phải file packed — xem
+[`CUSTOM_SFT.md`](./CUSTOM_SFT.md) mục "Packing không dùng được trên
+transformers phát hành".
 
-`SAVE_STEPS=25` thay vì 50 vì session Colab có thể chết bất cứ lúc nào — mất tối
-đa 25 step thay vì 50.
+Nhìn vài dòng log đầu để biết dữ liệu có vào đúng không:
 
-OOM thì thử theo thứ tự này (từ 80GB hạ về 8192 trước, từ 40GB hạ về 4096):
+| Dấu hiệu | Nghĩa |
+|---|---|
+| `loss` khoảng 0,2–3,0 | bình thường. HunyuanOCR vốn đã là model OCR nên loss khởi đầu thấp là đúng |
+| `loss` đúng `0.0` hoặc `nan` | `labels` bị che hết — chỗ cắt prompt trong `_process_single_item` sai |
+| `Skipping item` | processor trả thiếu key nào đó, mẫu bị bỏ âm thầm |
 
-```bash
-TUNE_VISION=False ...                  # đóng băng vision tower, rẻ nhất
-PACK_LEN=4096 ...                      # nhớ pack lại data cùng độ dài
-DEEPSPEED=scripts/zero2.json ...       # đẩy optimizer state ra, chậm hơn
-```
+Loss khởi đầu thấp cũng có nghĩa **biên cải thiện hẹp**: phần lớn thứ học được là
+quy ước Markdown và bố cục biểu mẫu VN, không phải khả năng đọc chữ. Với 1.007
+mẫu, 5 epoch dễ overfit — nếu loss train tụt nhanh, cân nhắc `EPOCHS=2` hoặc 3.
+
+OOM thì hạ `PACK_LEN` (ở chế độ không pack nó là độ dài tối đa của **một trang**,
+không phải một pack) xuống 8192, rồi mới tới `TUNE_VISION=False`.
 
 ## 8. Chạy lại sau khi mất session
 
