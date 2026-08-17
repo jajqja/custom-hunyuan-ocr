@@ -15,8 +15,25 @@ from transformers.models.hunyuan_vl.modeling_hunyuan_vl import (
     HunYuanVLModel,
     HunYuanVLVisionTransformer,
     apply_rotary_pos_emb,
-    apply_rotary_pos_emb_xdrope,
 )
+
+# `apply_rotary_pos_emb_xdrope` and the `HunYuanVLAttention` class below only
+# exist in the pre-merge transformers this trainer was written against. When
+# hunyuan_vl landed upstream (transformers 5.13) it was renamed: xdrope_section
+# -> mrope_section, apply_rotary_pos_emb_xdrope -> apply_multimodal_rotary_pos_emb,
+# and HunYuanVLAttention -> HunYuanVLDenseV1Attention. That upstream attention
+# already dispatches through ALL_ATTENTION_FUNCTIONS (so flash_attention_2 works)
+# and already handles packed position_ids, which is the whole reason this patch
+# exists — so on a released transformers the right move is to not patch at all.
+try:
+    from transformers.models.hunyuan_vl.modeling_hunyuan_vl import (
+        apply_rotary_pos_emb_xdrope,
+    )
+
+    HAS_XDROPE = True
+except ImportError:  # transformers >= 5.13
+    apply_rotary_pos_emb_xdrope = None
+    HAS_XDROPE = False
 
 
 def flash_attention_forward(
@@ -184,6 +201,15 @@ def return_mask(
 
 def replace_hunyuanocr_attention_class():
     """Replace HunYuanVL attention forward and create_causal_mask for flash_attention_2 support."""
+    if not HAS_XDROPE:
+        print(
+            "[trainer] transformers "
+            f"{transformers.__version__} đã tự hỗ trợ flash_attention_2 + packed "
+            "position_ids cho hunyuan_vl (HunYuanVLDenseV1Attention, mrope_section) "
+            "-> bỏ qua monkeypatch."
+        )
+        return
+
     # Replace the forward method of HunYuanVLAttention
     transformers.models.hunyuan_vl.modeling_hunyuan_vl.HunYuanVLAttention.forward = (
         hunyuanvl_forward
