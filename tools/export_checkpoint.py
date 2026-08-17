@@ -29,6 +29,48 @@ FROM_BASE = ["preprocessor_config.json", "processor_config.json",
              "generation_config.json"]
 
 
+# Khối rope trong config bị transformers 5.x chuẩn hoá lúc Trainer lưu model:
+#   {"type": "xdrope", "xdrope_section": [...]}  ->  {"rope_type": "dynamic",
+#                                                     "mrope_section": [...]}
+# Với transformers thì hai dạng tương đương (nó tự ánh xạ ngược). Với vLLM thì
+# không: get_rope() phân nhánh theo `rope_type`, "xdrope" -> XDRotaryEmbedding,
+# còn "dynamic" + "alpha" -> DynamicNTKAlphaRotaryEmbedding, tức rope 1 chiều,
+# và model vỡ shape ngay lúc profile_run. Nên lấy lại nguyên khối từ model gốc.
+ROPE_KEYS = ("rope_scaling", "rope_parameters")
+SUB_CONFIGS = ("text_config", "vision_config")
+
+
+def restore_rope(out_cfg, base_cfg):
+    if not (os.path.exists(out_cfg) and os.path.exists(base_cfg)):
+        return
+    try:
+        with open(out_cfg, encoding="utf-8") as fh:
+            cur = json.load(fh)
+        with open(base_cfg, encoding="utf-8") as fh:
+            base = json.load(fh)
+    except json.JSONDecodeError:
+        print("[cảnh báo] không parse được config.json, bỏ qua bước khôi phục rope")
+        return
+
+    changed = []
+
+    def fix(dst, src, where):
+        for k in ROPE_KEYS:
+            if k in src and dst.get(k) != src[k]:
+                dst[k] = src[k]
+                changed.append(f"{where}{k}")
+
+    fix(cur, base, "")
+    for sub in SUB_CONFIGS:
+        if isinstance(cur.get(sub), dict) and isinstance(base.get(sub), dict):
+            fix(cur[sub], base[sub], f"{sub}.")
+
+    if changed:
+        with open(out_cfg, "w", encoding="utf-8") as fh:
+            json.dump(cur, fh, ensure_ascii=False, indent=2)
+        print(f"khôi phục rope : {', '.join(changed)} (lấy từ {base_cfg})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
@@ -45,6 +87,9 @@ def main():
             continue
         shutil.copy2(src, os.path.join(args.out, name))
         copied.append(name)
+
+    restore_rope(os.path.join(args.out, "config.json"),
+                 os.path.join(args.base, "config.json"))
 
     filled = []
     for name in FROM_BASE:
