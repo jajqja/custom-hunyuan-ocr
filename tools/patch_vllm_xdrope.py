@@ -56,6 +56,21 @@ V_NEW = (
     "        # <<< hyocr-xdrope-patch\n"
 )
 
+# Patch 3: runner kiểm tra `uses_mrope` TRƯỚC `uses_xdrope_dim` ở cả ba chỗ chọn
+# buffer position (gpu_model_runner.py:1034/1040/2229). transformers tạo ra
+# `mrope_section` nên uses_mrope=True, mrope thắng, và model nhận buffer 3 dòng
+# dù xdrope đã được nhận diện. Cho xdrope quyền ưu tiên.
+C_OLD = (
+    'def uses_mrope(config: PretrainedConfig) -> bool:\n'
+    '    """Detect if the model with this config uses M-ROPE."""\n'
+)
+C_NEW = C_OLD + (
+    "    " + MARK + "\n"
+    "    if uses_xdrope_dim(config) > 0:\n"
+    "        return False\n"
+    "    # <<< hyocr-xdrope-patch\n"
+)
+
 PATCH = f'''{MARK}
     # transformers 5.x đổi tên {{"type":"xdrope","xdrope_section":[...]}} thành
     # {{"rope_type":"dynamic","mrope_section":[...]}}, khiến get_rope() dựng RoPE
@@ -116,9 +131,10 @@ def main():
 
     rope = module_file(args.python, "vllm.model_executor.layers.rotary_embedding")
     vision = module_file(args.python, "vllm.model_executor.models.hunyuan_vision")
+    cfg = module_file(args.python, "vllm.transformers_utils.config")
 
     if args.revert:
-        for path in (rope, vision):
+        for path in (rope, vision, cfg):
             backup = path + ".hyocr.bak"
             if os.path.exists(backup):
                 shutil.copy2(backup, path)
@@ -127,6 +143,7 @@ def main():
 
     apply(rope, ANCHOR, PATCH)
     apply(vision, V_OLD, V_NEW, replace=True)
+    apply(cfg, C_OLD, C_NEW, replace=True)
 
     check = subprocess.run(
         [args.python, "-c",

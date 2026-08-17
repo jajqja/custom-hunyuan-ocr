@@ -281,6 +281,13 @@ của config — `PretrainedConfig` giữ nguyên khoá lạ thành thuộc tín
 |---|---|
 | `rotary_embedding/__init__.py` | `get_rope()`: `dynamic` + `mrope_section` + `alpha` → chuyển sang nhánh `xdrope` |
 | `models/hunyuan_vision.py` | `xd_num = len(hf_config.rope_scaling["xdrope_section"])` → đọc mềm, `rope_scaling` giờ là `None` |
+| `transformers_utils/config.py` | `uses_mrope()` trả `False` khi `uses_xdrope_dim > 0` |
+
+Mảnh thứ ba là mảnh dễ sót nhất. Runner kiểm tra `uses_mrope` **trước**
+`uses_xdrope_dim` ở cả ba chỗ chọn buffer position
+(`gpu_model_runner.py:1034`, `:1040`, `:2229`). transformers tạo ra
+`mrope_section` nên `uses_mrope` = True, mrope thắng, và model vẫn nhận buffer
+3 dòng dù xdrope đã được nhận diện đúng — cùng một `IndexError`, không đổi.
 
 Idempotent, sao lưu `.hyocr.bak`, gỡ bằng `--revert`, và **kiểm tra file sau khi
 vá có parse được không trước khi ghi** — thụt lề sai vẫn ghi được nhưng chỉ vỡ
