@@ -3,6 +3,9 @@
 Runbook cho fork này. Nguồn dữ liệu: `makedata/hf_upload` (1.007 train / 120
 validation, 4 config: GCN, Documents, Others, Handwriting).
 
+Chạy trên Google Colab thì xem [`COLAB.md`](./COLAB.md) — cùng quy trình nhưng
+đã tính tới A100-40GB, flash-attn wheel, và chuyện mất session.
+
 Tất cả script upstream vẫn giữ nguyên hành vi cũ; phần riêng của fork là
 `scripts/env_single.sh`, `scripts/sft_base_1gpu.sh`, `tools/makedata_to_hyocr.py`
 và cờ `--allow-empty-answer` trong `tools/pipeline_count_and_pack.py`.
