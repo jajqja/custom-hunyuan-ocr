@@ -9,34 +9,38 @@ CELLS = [
 Chạy từ trên xuống. Runtime: **A100** (`Runtime → Change runtime type`).
 Chi tiết và cách xử lý sự cố: [`docs/COLAB.md`](https://github.com/jajqja/custom-hunyuan-ocr/blob/main/docs/COLAB.md).
 
-Trước khi chạy, sửa hai biến ở cell **Cấu hình**."""),
+Trước khi chạy, sửa hai biến ở cell **Cấu hình**.
+
+Toàn bộ phần train chạy trong một **venv riêng** ở `/content/venv`, không đụng
+tới Python hệ thống của Colab. Lý do ở cell bước 5."""),
 
     ("md", "## 1. GPU và PACK_LEN"),
-    ("code", """import subprocess, torch
+    ("code", r"""import re, subprocess
 
-print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"],
-                     capture_output=True, text=True).stdout)
-GB = torch.cuda.get_device_properties(0).total_memory / 1024**3
+out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"],
+                     capture_output=True, text=True).stdout
+print(out)
+GB = int(re.search(r"(\d+)\s*MiB", out).group(1)) / 1024
 PACK_LEN = 16384 if GB >= 70 else 8192 if GB >= 35 else 4096
 print(f"{GB:.0f} GB -> PACK_LEN={PACK_LEN}")
-# Colab cấp A100 cả bản 40GB lẫn 80GB tuỳ lần, nên đừng đặt cứng: 80GB -> 16384,
-# 40GB -> 8192 (~2 trang/pack, bình thường). Trên 80GB có thể thử 20480 sau khi
-# xem headroom ở lần chạy đầu."""),
+# Đọc từ nvidia-smi chứ không import torch: cell này chạy trước khi venv tồn tại.
+# Colab cấp A100 cả bản 40GB lẫn 80GB tuỳ lần, nên đừng đặt cứng. Trên 80GB có
+# thể thử 20480 sau khi xem headroom ở lần chạy đầu."""),
 
     ("md", "## 2. Cấu hình — **sửa hai dòng dưới**"),
     ("code", """DATASET_REPO = "<user>/vietnamese-doc-ocr"   # repo dataset đã đẩy lên HF
-OUTPUT_REPO  = "<user>/hunyuanocr-vi-sft"    # nơi đẩy model sau khi train (bước 9)
+OUTPUT_REPO  = "<user>/hunyuanocr-vi-sft"    # nơi đẩy model sau khi train
 
 REPO_URL = "https://github.com/jajqja/custom-hunyuan-ocr.git"
 MODEL_DIR, DATA_DIR, WORK = "/content/HunyuanOCR", "/content/dataset", "/content/hyocr"
 DRIVE_DIR = "/content/drive/MyDrive/hyocr_sft"
-RUN_NAME = "colab_run\""""),
+VENV, RUN_NAME = "/content/venv", "colab_run\""""),
 
     ("md", """## 3. Gắn Drive
 
 Session Colab chết là mất sạch `/content`. **Không** ghi checkpoint thẳng vào
 Drive — một checkpoint model 1B kèm optimizer state cỡ 8–12 GB, ghi qua FUSE
-sẽ làm training đứng hình. Bước 7 lưu vào `/content` rồi rsync sang Drive."""),
+sẽ làm training đứng hình. Bước 9 lưu vào `/content` rồi rsync sang Drive."""),
     ("code", """from google.colab import drive
 drive.mount('/content/drive')
 import os; os.makedirs(DRIVE_DIR, exist_ok=True)"""),
@@ -46,50 +50,69 @@ import os; os.makedirs(DRIVE_DIR, exist_ok=True)"""),
 %cd $WORK
 !git log --oneline -1"""),
 
-    ("md", "## 5. Dependency"),
-    ("code", """!pip install -q -U "transformers>=4.57" accelerate deepspeed safetensors \\
-                   binpacking lmdb tensorboard "huggingface_hub>=0.34\""""),
+    ("md", """## 5. Tạo venv và cài dependency
 
-    ("md", """`flash-attn` bắt buộc: `train/trainer.py:3` import `flash_attn_varlen_func`
-ngay đầu module và `train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"`.
-Build from source mất 40–60 phút, nên lấy wheel dựng sẵn.
+Dựng venv sạch thay vì cài đè lên Python của Colab, vì hai lý do:
 
-Wheel được build riêng cho từng tổ hợp (CUDA major, torch minor, cxx11 ABI,
-Python, kiến trúc). Colab hay chạy torch mới hơn wheel mới nhất vài tuần, nên
-script dưới **liệt kê asset thật từ GitHub API rồi lọc**, không đoán tên file.
-Không khớp thì nó in ra lệnh hạ torch về bản gần nhất có wheel."""),
-    ("code", """!python tools/pick_flash_attn.py --install"""),
+1. **flash-attn là bắt buộc và chỉ có wheel cho một số bản torch nhất định.**
+   `train/trainer.py:3` import `flash_attn_varlen_func` ngay đầu module, còn
+   `train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"` —
+   không có đường lùi sang eager. Wheel build riêng cho từng tổ hợp (CUDA major,
+   torch minor, cxx11 ABI, Python, arch) và torch luôn ra trước wheel vài tuần,
+   nên Colab thường chạy bản torch chưa có wheel. Build from source tốn 40–60
+   phút mỗi session.
+2. Hạ torch của Python hệ thống làm hỏng nửa số gói Colab cài sẵn và bắt phải
+   restart kernel. Trong venv thì không ảnh hưởng gì.
 
-    ("md", """**Nếu cell trên báo "Không có wheel cho torch X":** copy hai lệnh nó in ra
-vào cell dưới rồi chạy. Cell tự giết kernel để Colab nạp lại torch mới — sau khi
-Colab báo "Runtime restarted", chạy lại từ cell `%cd` (bước 4) trở xuống, và
-**bỏ qua** cell hạ cấp này ở lần chạy thứ hai."""),
-    ("code", """# Dán 2 dòng pip mà pick_flash_attn.py in ra vào đây, ví dụ:
-# !pip install -q "torch==2.10.0" torchvision --index-url https://download.pytorch.org/whl/cu128
-# !pip install -q https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1%2Bcu12torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+`--plan` hỏi GitHub Releases API xem bản torch mới nhất nào còn wheel, rồi cài
+đúng bộ đó vào venv. Không đoán tên file, nên không mục theo thời gian."""),
+    ("code", """import json, subprocess, sys
 
-import os; os.kill(os.getpid(), 9)   # ép Colab restart runtime"""),
-    ("code", """from flash_attn.flash_attn_interface import flash_attn_varlen_func
-print("flash-attn OK")"""),
+plan = json.loads(subprocess.run(
+    [sys.executable, "tools/pick_flash_attn.py", "--plan"],
+    capture_output=True, text=True, check=True).stdout)
+print(json.dumps(plan, indent=2))
 
-    ("md", "## 6. Đăng nhập HF, tải model + dataset"),
-    ("code", """from huggingface_hub import notebook_login
+PY = f"{VENV}/bin/python"
+pip = lambda *a: subprocess.run([PY, "-m", "pip", "install", "-q", *a], check=True)
+
+subprocess.run([sys.executable, "-m", "venv", VENV], check=True)
+pip("-U", "pip", "setuptools", "wheel")
+pip(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
+pip(plan["wheel"])
+pip("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
+    "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
+    "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
+print("venv xong")"""),
+
+    ("md", """Từ đây mọi lệnh shell đều chạy với `PATH=$VENV/bin:$PATH`, để `python`
+và `torchrun` trong các script `scripts/*.sh` trỏ vào venv."""),
+    ("code", """!$VENV/bin/python -c "import torch, flash_attn; \\
+print('torch', torch.__version__, '| cuda', torch.version.cuda, \\
+      '| flash_attn', flash_attn.__version__, '| gpu', torch.cuda.get_device_name(0))\""""),
+
+    ("md", """## 6. Đăng nhập HF, tải model + dataset
+
+`notebook_login()` chạy ở kernel hệ thống (cần widget) nhưng ghi token vào
+`~/.cache/huggingface/token`, dùng chung với venv."""),
+    ("code", """!pip install -q -U "huggingface_hub>=0.34"
+from huggingface_hub import notebook_login
 notebook_login()   # token quyền read; dataset đang private"""),
-    ("code", """!hf download tencent/HunyuanOCR --local-dir $MODEL_DIR --exclude "v1.0/*"
-!hf download $DATASET_REPO --repo-type dataset --local-dir $DATA_DIR
+    ("code", """!$VENV/bin/hf download tencent/HunyuanOCR --local-dir $MODEL_DIR --exclude "v1.0/*"
+!$VENV/bin/hf download $DATASET_REPO --repo-type dataset --local-dir $DATA_DIR
 !ls $DATA_DIR"""),
 
     ("md", """Prompt không nằm thành file riêng trong repo dataset — nó ở trong
 `README.md`, trong khối ```` ```text ````."""),
-    ("code", """import re, pathlib
+    ("code", r"""import re, pathlib
 
 readme = pathlib.Path(f"{DATA_DIR}/README.md").read_text(encoding="utf-8")
-prompt = re.search(r"````text\\n(.*?)\\n````", readme, re.S).group(1).strip()
+prompt = re.search(r"````text\n(.*?)\n````", readme, re.S).group(1).strip()
 pathlib.Path("/content/ocr_prompt.md").write_text(prompt, encoding="utf-8")
 print(prompt)"""),
 
     ("md", "## 7. Convert sang raw JSONL"),
-    ("code", """!python tools/makedata_to_hyocr.py \\
+    ("code", """!$VENV/bin/python tools/makedata_to_hyocr.py \\
     --root $DATA_DIR \\
     --prompt-file /content/ocr_prompt.md \\
     --out-dir $WORK/data/raw \\
@@ -100,7 +123,8 @@ print(prompt)"""),
 
 `NUM_PROCESSES=2` chứ không phải 32: Colab chỉ có ~12 vCPU và mỗi process load
 một processor riêng. Mất 10–20 phút vì phải mở từng ảnh để đếm vision token."""),
-    ("code", """!MODEL_PATH=$MODEL_DIR \\
+    ("code", """!PATH=$VENV/bin:$PATH \\
+ MODEL_PATH=$MODEL_DIR \\
  INPUT_LIST=$WORK/data/data_list.txt \\
  PACK_OUTPUT=$WORK/data/packed/train_$PACK_LEN.jsonl \\
  PACK_LEN=$PACK_LEN \\
@@ -124,28 +148,31 @@ subprocess.Popen(f"while true; do rsync -a --delete {WORK}/output/ {DRIVE_DIR}/;
 print("rsync nền đã chạy")"""),
     ("code", """%load_ext tensorboard
 %tensorboard --logdir $WORK/output"""),
-    ("code", """!MODEL_PATH=$MODEL_DIR \\
+    ("code", """!PATH=$VENV/bin:$PATH \\
+ MODEL_PATH=$MODEL_DIR \\
  TRAIN_DATA=$WORK/data/packed/train_$PACK_LEN.jsonl \\
  PACK_LEN=$PACK_LEN \\
  RUN_NAME=$RUN_NAME \\
  SAVE_STEPS=25 \\
      bash scripts/sft_base_1gpu.sh"""),
 
-    ("md", """OOM trên 40GB thì thử theo thứ tự: `TUNE_VISION=False` (đóng băng vision
-tower, rẻ nhất) → `PACK_LEN=4096` (phải pack lại) → `DEEPSPEED=scripts/zero2.json`."""),
+    ("md", """OOM thì thử theo thứ tự: `TUNE_VISION=False` (đóng băng vision tower, rẻ
+nhất) → hạ `PACK_LEN` một bậc (phải pack lại) → `DEEPSPEED=scripts/zero2.json`."""),
 
     ("md", """## 10. Mất session → chạy lại
 
-Làm lại cell 1–7, rồi kéo checkpoint từ Drive về **trước** khi chạy lại cell
-train với đúng `RUN_NAME` cũ. `train_hunyuan.py:221` tự
-`resume_from_checkpoint=True` khi thấy `checkpoint-*` trong output dir."""),
+Làm lại cell 1–8 (kể cả dựng venv — `/content` đã bị xoá sạch), rồi kéo
+checkpoint từ Drive về **trước** khi chạy lại cell train với đúng `RUN_NAME` cũ.
+`train_hunyuan.py:221` tự `resume_from_checkpoint=True` khi thấy `checkpoint-*`
+trong output dir."""),
     ("code", """!mkdir -p $WORK/output $WORK/data/packed
 !rsync -a $DRIVE_DIR/ $WORK/output/
 !cp $DRIVE_DIR/packed/*.jsonl $WORK/data/packed/ 2>/dev/null
 !ls $WORK/output/$RUN_NAME"""),
 
     ("md", "## 11. Đẩy model đã train lên HF"),
-    ("code", """!hf upload $OUTPUT_REPO $WORK/output/$RUN_NAME . --repo-type model --private"""),
+    ("code", """!$VENV/bin/hf upload $OUTPUT_REPO $WORK/output/$RUN_NAME . \\
+    --repo-type model --private"""),
 ]
 
 

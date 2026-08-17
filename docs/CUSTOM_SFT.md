@@ -14,16 +14,46 @@ và cờ `--allow-empty-answer` trong `tools/pipeline_count_and_pack.py`.
 
 ## 0. Môi trường
 
+Dựng môi trường riêng, đừng cài vào Python hệ thống — bước dưới ghim một bản
+torch cụ thể và sẽ kéo tụt các gói khác nếu cài chung.
+
 ```bash
-conda create -n hyocr python=3.12 -y && conda activate hyocr
+python3.12 -m venv .venv           # hoặc: conda create -n hyocr python=3.12 -y
+source .venv/bin/activate
+pip install -U pip setuptools wheel
+```
+
+**Cài torch trước, và phải là bản có wheel flash-attn.**
+`train/trainer.py:3` import `flash_attn_varlen_func` ngay đầu module, còn
+`train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"` —
+không có đường lùi sang eager, thiếu là chết lúc load model chứ không phải lúc
+train. Wheel flash-attn build riêng cho từng tổ hợp (CUDA major, torch minor,
+cxx11 ABI, Python, arch) và torch luôn ra trước wheel vài tuần, nên **cài torch
+mới nhất rồi mới tìm wheel là ngược**. Hỏi trước:
+
+```bash
+python tools/pick_flash_attn.py --plan
+# {"torch": "2.10.0", "index_url": "https://download.pytorch.org/whl/cu128",
+#  "wheel": "https://github.com/Dao-AILab/.../flash_attn-2.8.1+cu12torch2.10...whl"}
+```
+
+rồi cài đúng bộ đó:
+
+```bash
+pip install "torch==2.10.0" torchvision --index-url https://download.pytorch.org/whl/cu128
+python tools/pick_flash_attn.py --install     # tự chọn wheel khớp torch vừa cài
+```
+
+Còn lại:
+
+```bash
 pip install -r requirements.txt
-pip install flash-attn --no-build-isolation      # bắt buộc, xem ghi chú bên dưới
 pip install binpacking lmdb
 ```
 
-`train/train_hunyuan.py` gọi model với `attn_implementation="flash_attention_2"`
-cứng trong code, **không có đường lùi sang eager** — thiếu `flash-attn` là chết
-ngay lúc load model, không phải lúc train.
+Đã có sẵn torch không đổi được thì `python tools/pick_flash_attn.py --install`
+vẫn dùng được — không có wheel khớp thì nó in ra bản torch gần nhất có, hoặc
+lùi về `pip install flash-attn --no-build-isolation` (build 40–60 phút).
 
 Tải model gốc:
 

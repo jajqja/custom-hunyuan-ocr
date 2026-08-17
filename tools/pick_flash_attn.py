@@ -57,12 +57,45 @@ def runtime():
     }
 
 
+# Chỉ số CUDA trong tên wheel là major ("cu12"), còn index của PyTorch là
+# major+minor ("cu128"). Không suy ra được từ nhau nên phải tra bảng.
+INDEX = {"12": "cu128", "13": "cu130"}
+
+
+def plan(cu_pref, py, arch, abi):
+    """Chưa có torch: chọn bản torch mới nhất còn wheel flash-attn.
+
+    Dùng để dựng venv sạch — cài torch trước rồi mới biết có wheel hay không là
+    ngược, vì torch luôn ra trước wheel vài tuần.
+    """
+    same = [(d, u) for d, u in list_wheels()
+            if d["py"] == py and d["arch"] == arch and d["abi"] == abi]
+    if not same:
+        raise SystemExit(f"Không có wheel nào cho {py}/{arch}/cxx11abi{abi}.")
+    target = max({d["torch"] for d, _ in same}, key=verkey)
+    cands = [(d, u) for d, u in same if d["torch"] == target]
+    cands.sort(key=lambda x: (x[0]["cu"] == cu_pref, verkey(x[0]["ver"])), reverse=True)
+    d, url = cands[0]
+    return {"torch": f"{target}.0", "cu": d["cu"],
+            "index_url": f"https://download.pytorch.org/whl/{INDEX.get(d['cu'], 'cu' + d['cu'])}",
+            "flash_attn": d["ver"], "wheel": url}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--install", action="store_true")
+    ap.add_argument("--plan", action="store_true",
+                    help="in JSON {torch, index_url, wheel} mà không cần đã có torch")
     for k in ("torch", "cu", "abi", "py", "arch"):
         ap.add_argument(f"--{k}", default=None, help="ghi đè giá trị dò được")
     args = ap.parse_args()
+
+    if args.plan:
+        print(json.dumps(plan(args.cu or "12",
+                              args.py or f"cp{sys.version_info.major}{sys.version_info.minor}",
+                              args.arch or "x86_64",
+                              args.abi or "TRUE"), indent=2))
+        return 0
 
     env = {"torch": None, "cu": None, "abi": None, "py": None, "arch": None}
     if any(getattr(args, k) is None for k in env):
@@ -95,10 +128,6 @@ def main():
     if not have:
         print("Không có gì khớp nền tảng này — phải build from source.")
         return 1
-
-    # Chỉ số CUDA của wheel là major ("cu12"), còn index của PyTorch là major+minor
-    # ("cu128"). Không suy ra được từ nhau nên phải tra bảng.
-    INDEX = {"12": "cu128", "13": "cu130"}
 
     target = have[-1]
     cands = [(d, u) for d, u in same_platform if d["torch"] == target]

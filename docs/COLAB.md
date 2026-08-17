@@ -57,48 +57,73 @@ làm ở bước 7: lưu vào `/content`, đồng bộ sang Drive bằng một v
 !git log --oneline -1
 ```
 
-## 4. Cài dependency
+## 4. Tạo venv và cài dependency
 
-```bash
-!pip install -q -U "transformers>=4.57" accelerate deepspeed safetensors \
-                   binpacking lmdb tensorboard "huggingface_hub>=0.34"
+Dựng venv sạch ở `/content/venv` thay vì cài đè lên Python hệ thống của Colab.
+Hai lý do:
+
+1. **flash-attn bắt buộc, và chỉ có wheel cho một số bản torch.**
+   `train/trainer.py:3` import `flash_attn_varlen_func` ngay đầu module, còn
+   `train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"` —
+   không có đường lùi sang eager. Wheel build riêng cho từng tổ hợp **(CUDA
+   major, torch minor, cxx11 ABI, Python, arch)** và torch luôn ra trước wheel
+   vài tuần, nên Colab thường chạy bản torch chưa có wheel (8/2026: Colab ở
+   torch 2.11, wheel mới nhất cho torch 2.10). Build from source tốn 40–60 phút
+   mỗi session.
+2. Hạ torch của Python hệ thống làm hỏng nửa số gói Colab cài sẵn và bắt restart
+   kernel. Trong venv thì không đụng gì tới runtime.
+
+```python
+import json, subprocess, sys
+
+VENV = "/content/venv"
+plan = json.loads(subprocess.run(
+    [sys.executable, "tools/pick_flash_attn.py", "--plan"],
+    capture_output=True, text=True, check=True).stdout)
+print(json.dumps(plan, indent=2))
+
+PY  = f"{VENV}/bin/python"
+pip = lambda *a: subprocess.run([PY, "-m", "pip", "install", "-q", *a], check=True)
+
+subprocess.run([sys.executable, "-m", "venv", VENV], check=True)
+pip("-U", "pip", "setuptools", "wheel")
+pip(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
+pip(plan["wheel"])
+pip("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
+    "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
+    "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 ```
 
-`flash-attn` là **bắt buộc** — `train/trainer.py:3` import
-`flash_attn.flash_attn_interface.flash_attn_varlen_func` ở đầu module và
-`train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"`. Build
-from source trên Colab mất 40–60 phút mỗi session, nên phải lấy wheel dựng sẵn:
+`--plan` hỏi GitHub Releases API xem bản torch mới nhất nào **còn wheel**, rồi
+trả về JSON:
 
-```bash
-!python tools/pick_flash_attn.py --install
+```json
+{
+  "torch": "2.10.0",
+  "cu": "12",
+  "index_url": "https://download.pytorch.org/whl/cu128",
+  "flash_attn": "2.8.1",
+  "wheel": "https://github.com/Dao-AILab/.../flash_attn-2.8.1%2Bcu12torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+}
 ```
 
-Wheel flash-attn được build riêng cho từng tổ hợp **(CUDA major, torch minor,
-cxx11 ABI, phiên bản Python, kiến trúc)**. Đoán tên file rồi thử tải là cách
-hỏng thường xuyên — torch mới ra trước, wheel ra sau vài tuần. Script liệt kê
-asset thật từ GitHub Releases API rồi lọc.
+Không đoán tên file nên không mục theo thời gian; torch có lên 2.12, 2.13 thì
+script vẫn chọn đúng.
 
-Runtime Colab tháng 8/2026 chạy **torch 2.11**, mà bản mới nhất có wheel là
-**torch 2.10**. Gặp trường hợp đó script in sẵn lệnh hạ cấp:
-
-```bash
-!pip install -q "torch==2.10.0" torchvision \
-     --index-url https://download.pytorch.org/whl/cu128
-!python tools/pick_flash_attn.py --install
-```
-
-rồi **phải restart runtime** (`import os; os.kill(os.getpid(), 9)`) và chạy lại
-từ bước 3. Torch 2.10 là bản duy nhất còn đường lùi ngoài việc build from source
-40–60 phút mỗi session.
-
-Lưu ý `nvidia-smi` báo "CUDA Version: 13.0" là **phiên bản driver hỗ trợ**, không
-phải CUDA mà torch được build. Mảnh dùng để chọn wheel là `torch.version.cuda`.
+Mất 5–10 phút, tốn ~6 GB đĩa (Colab A100 có sẵn hơn 100 GB).
 
 Kiểm tra:
 
 ```python
-from flash_attn.flash_attn_interface import flash_attn_varlen_func   # phải im lặng
+!$VENV/bin/python -c "import torch, flash_attn; \
+print(torch.__version__, torch.version.cuda, flash_attn.__version__)"
 ```
+
+`nvidia-smi` báo "CUDA Version: 13.0" là **phiên bản driver hỗ trợ**, không phải
+CUDA mà torch được build — driver 580.x chạy binary cu12.8 bình thường.
+
+**Từ đây mọi lệnh shell đều thêm `PATH=$VENV/bin:$PATH`**, để `python` và
+`torchrun` trong `scripts/*.sh` trỏ vào venv chứ không vào Python hệ thống.
 
 ## 5. Đăng nhập HF, tải model + dataset
 
@@ -109,10 +134,10 @@ notebook_login()          # token cần quyền read; dataset đang private
 
 ```bash
 # model gốc (~2 GB), bỏ nhánh v1.0
-!hf download tencent/HunyuanOCR --local-dir /content/HunyuanOCR --exclude "v1.0/*"
+!$VENV/bin/hf download tencent/HunyuanOCR --local-dir /content/HunyuanOCR --exclude "v1.0/*"
 
 # dataset (~600 MB) — đổi <user>/<repo> cho đúng repo bạn đã đẩy
-!hf download <user>/vietnamese-doc-ocr --repo-type dataset \
+!$VENV/bin/hf download <user>/vietnamese-doc-ocr --repo-type dataset \
              --local-dir /content/dataset
 ```
 
@@ -138,7 +163,7 @@ print(prompt[:120], "...")
 ## 6. Convert + pack
 
 ```bash
-!python tools/makedata_to_hyocr.py \
+!$VENV/bin/python tools/makedata_to_hyocr.py \
     --root /content/dataset \
     --prompt-file /content/ocr_prompt.md \
     --out-dir /content/hyocr/data/raw \
@@ -148,8 +173,8 @@ print(prompt[:120], "...")
 Ra 1.007 dòng train / 120 dòng validation, `thiếu ảnh` phải là 0.
 
 ```bash
-%env MODEL_PATH=/content/HunyuanOCR
-!MODEL_PATH=$MODEL_PATH \
+!PATH=$VENV/bin:$PATH \
+ MODEL_PATH=/content/HunyuanOCR \
  INPUT_LIST=/content/hyocr/data/data_list.txt \
  PACK_OUTPUT=/content/hyocr/data/packed/train_${PACK_LEN}.jsonl \
  PACK_LEN=$PACK_LEN \
@@ -185,7 +210,8 @@ subprocess.Popen(
 ```
 
 ```bash
-!MODEL_PATH=/content/HunyuanOCR \
+!PATH=$VENV/bin:$PATH \
+ MODEL_PATH=/content/HunyuanOCR \
  TRAIN_DATA=/content/hyocr/data/packed/train_${PACK_LEN}.jsonl \
  PACK_LEN=$PACK_LEN \
  RUN_NAME=colab_run \
@@ -221,7 +247,7 @@ packed chỉ vài MB, đáng để giữ.
 ## 9. Lấy model ra
 
 ```bash
-!hf upload <user>/hunyuanocr-vi-sft /content/hyocr/output/colab_run . \
+!$VENV/bin/hf upload <user>/hunyuanocr-vi-sft /content/hyocr/output/colab_run . \
            --repo-type model --private
 ```
 
@@ -235,7 +261,8 @@ gọi `processor.save_pretrained`), đủ để load lại bằng
 
 | Triệu chứng | Nguyên nhân |
 |---|---|
-| `ModuleNotFoundError: flash_attn` lúc load model | wheel chưa cài hoặc sai ABI — xem bước 4 |
+| `ModuleNotFoundError: flash_attn` lúc load model | đang chạy bằng Python hệ thống chứ không phải venv — thiếu `PATH=$VENV/bin:$PATH` |
+| `pick_flash_attn.py` báo không có wheel nào | nền tảng lạ (aarch64, cp313 mới) — build from source là đường duy nhất |
 | `RuntimeError: Default process group has not been initialized` | chạy `python train/train_hunyuan.py` trực tiếp. Phải qua `torchrun` (script đã lo), vì `train_hunyuan.py:182` gọi `torch.distributed.get_rank()` |
 | Pack ra 0 dòng | đường dẫn ảnh trong `data/raw/*.jsonl` là tuyệt đối của máy cũ — phải chạy lại converter trên Colab |
 | Eval vỡ ngay batch đầu | đừng bật `--eval_strategy steps`, xem `CUSTOM_SFT.md` mục 4 |
