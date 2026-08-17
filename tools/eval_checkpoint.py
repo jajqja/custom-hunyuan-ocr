@@ -57,7 +57,11 @@ def main():
     ap.add_argument("--processor", default=None, help="mặc định: giống --model")
     ap.add_argument("--data", required=True, help="JSONL dạng --flat")
     ap.add_argument("--out", default=None, help="ghi từng mẫu ra JSONL để soi mắt")
-    ap.add_argument("--limit", type=int, default=0, help="chỉ chấm N mẫu đầu")
+    ap.add_argument("--limit", type=int, default=0, help="chỉ chấm N mẫu ĐẦU tiên")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="chấm N mẫu rải đều cả file. Dùng cái này thay --limit khi "
+                         "muốn tập con đại diện: JSONL được ghi lần lượt theo từng "
+                         "config nên N mẫu đầu sẽ toàn GCN")
     ap.add_argument("--max-new-tokens", type=int, default=4096)
     ap.add_argument("--repetition-penalty", type=float, default=1.08)
     ap.add_argument("--attn", default="flash_attention_2")
@@ -68,7 +72,10 @@ def main():
     from transformers import AutoProcessor, HunYuanVLForConditionalGeneration
 
     rows = [json.loads(x) for x in open(args.data, encoding="utf-8") if x.strip()]
-    if args.limit:
+    if args.sample and args.sample < len(rows):
+        step = len(rows) / args.sample
+        rows = [rows[int(i * step)] for i in range(args.sample)]
+    elif args.limit:
         rows = rows[: args.limit]
     print(f"{len(rows)} mẫu | model {args.model}")
 
