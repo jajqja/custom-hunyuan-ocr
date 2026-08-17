@@ -71,29 +71,44 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
         trainer._save(output_dir, state_dict=cpu_state_dict)
 
 
+def resolve_submodules(model):
+    """(vision_tower, projector, language_model), cho cả hai cách đặt tên.
+
+    transformers đổi bố cục khi hunyuan_vl được merge (5.13):
+        model.vit            -> model.model.vision_tower
+        model.vit.perceive   -> model.model.vision_tower.patch_merger
+        model.model          -> model.model.language_model
+    """
+    if hasattr(model, "vit"):                       # transformers pre-merge
+        return model.vit, model.vit.perceive, model.model
+    inner = model.model                             # transformers >= 5.13
+    vision = inner.vision_tower
+    return vision, vision.patch_merger, inner.language_model
+
+
+def _set_requires_grad(module, flag):
+    for p in module.parameters():
+        p.requires_grad = flag
+
+
+def _report_trainable(name, module):
+    total = sum(p.numel() for p in module.parameters())
+    train = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    pct = 100 * train / total if total else 0.0
+    print(f"[{name}] trainable {train:,} / {total:,} ({pct:.1f}%)")
+
+
 def set_model(model_args, model):
-    if model_args.tune_mm_vision:
-        for n, p in model.vit.named_parameters():
-            p.requires_grad = True
-    else:
-        for n, p in model.vit.named_parameters():
-            p.requires_grad = False
+    vision, projector, language = resolve_submodules(model)
 
-    if model_args.tune_mm_mlp:
-        for n, p in model.vit.perceive.named_parameters():
-            p.requires_grad = True
-    else:
-        for n, p in model.vit.perceive.named_parameters():
-            p.requires_grad = False
-
-    if model_args.tune_mm_llm:
-        for n, p in model.model.named_parameters():
-            p.requires_grad = True
-        model.lm_head.requires_grad = True
-    else:
-        for n, p in model.model.named_parameters():
-            p.requires_grad = False
-        model.lm_head.requires_grad = False
+    _set_requires_grad(vision, model_args.tune_mm_vision)
+    # Sau vision vì projector nằm trong vision tower — thứ tự này cho phép
+    # đóng băng encoder mà vẫn train riêng projector.
+    _set_requires_grad(projector, model_args.tune_mm_mlp)
+    _set_requires_grad(language, model_args.tune_mm_llm)
+    # requires_grad trên một nn.Module chỉ tạo ra một thuộc tính vô nghĩa; phải
+    # đi qua từng parameter.
+    _set_requires_grad(model.lm_head, model_args.tune_mm_llm)
 
 
 def train(attn_implementation="flash_attention_2"):
@@ -179,9 +194,12 @@ def train(attn_implementation="flash_attention_2"):
     else:
         set_model(model_args, model)
 
-        if torch.distributed.get_rank() == 0:
-            model.vit.print_trainable_parameters()
-            model.model.print_trainable_parameters()
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            vision, projector, language = resolve_submodules(model)
+            _report_trainable("vision", vision)
+            _report_trainable("projector", projector)
+            _report_trainable("language", language)
+            _report_trainable("total", model)
 
     # data_module = make_supervised_data_module(processor, data_args=data_args)
     # Load datasets

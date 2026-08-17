@@ -184,6 +184,21 @@ tách rời bằng `data/raw/validation.jsonl` và code inference trong `inferen
 | `scripts/pack_data.sh` | thêm `ALLOW_EMPTY`, `FOREGROUND`, `PYTHON` |
 | `scripts/sft_base_1gpu.sh` | thêm `PYTHON` / `TORCHRUN`, preflight, lọc flag qua `tools/filter_train_args.py` |
 | `train/trainer.py` | import `apply_rotary_pos_emb_xdrope` thành tuỳ chọn; bỏ monkeypatch trên transformers ≥ 5.13 |
+| `train/train_hunyuan.py` | `resolve_submodules()` — bố cục module đổi tên ở transformers 5.13 |
+
+### Bố cục module đổi tên
+
+| pre-merge (code gốc) | transformers ≥ 5.13 |
+|---|---|
+| `model.vit` | `model.model.vision_tower` |
+| `model.vit.perceive` | `model.model.vision_tower.patch_merger` |
+| `model.model` (phần ngôn ngữ) | `model.model.language_model` |
+| `model.lm_head` | `model.lm_head` |
+
+`set_model()` đi qua `resolve_submodules()` nên chạy được cả hai. Nhân tiện sửa
+`model.lm_head.requires_grad = True` — gán `requires_grad` lên một `nn.Module`
+chỉ tạo ra một thuộc tính vô nghĩa, không đóng băng gì cả; phải duyệt từng
+parameter.
 
 ### Vì sao phải lọc flag
 
