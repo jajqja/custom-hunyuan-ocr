@@ -46,6 +46,18 @@ def list_wheels(pages=6):
     return out
 
 
+def install(url):
+    """pip của venv, hoặc uv nếu venv được tạo không kèm pip (`uv venv` không
+    seed pip trừ khi có --seed)."""
+    if subprocess.run([sys.executable, "-m", "pip", "--version"],
+                      capture_output=True).returncode == 0:
+        cmd = [sys.executable, "-m", "pip", "install", "-q", url]
+    else:
+        print("venv không có pip -> dùng uv")
+        cmd = ["uv", "pip", "install", "-q", "--python", sys.executable, url]
+    subprocess.run(cmd, check=True)
+
+
 def runtime():
     import torch
     return {
@@ -118,7 +130,7 @@ def main():
         url = exact[0][1]
         print("khớp:", url)
         if args.install:
-            subprocess.run([sys.executable, "-m", "pip", "install", "-q", url], check=True)
+            install(url)
             print("đã cài")
         return 0
 
