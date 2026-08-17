@@ -60,6 +60,10 @@ def main():
                     help="drop samples whose label is empty (default: keep them — "
                          "they are the blank-page samples that teach the model to "
                          "emit nothing)")
+    ap.add_argument("--flat", action="store_true",
+                    help="xuất schema cho chế độ KHÔNG pack: "
+                         '{"image","question","answer"} — đây là thứ '
+                         "train/data_processor.py đọc trực tiếp")
     ap.add_argument("--data-list", default=None,
                     help="also write a configs/data_list.txt pointing at the train JSONL(s)")
     args = ap.parse_args()
@@ -84,8 +88,11 @@ def main():
                     empty += 1
                     if args.drop_empty:
                         continue
-                keep.append({"img_path_sh": r["_abs"],
-                             "conv": [{"question": prompt, "answer": r["text"]}]})
+                keep.append(
+                    {"image": r["_abs"], "question": prompt, "answer": r["text"]}
+                    if args.flat else
+                    {"img_path_sh": r["_abs"],
+                     "conv": [{"question": prompt, "answer": r["text"]}]})
             buckets[config] = keep
             report.append((config, split, len(rows), empty, missing, len(keep)))
 

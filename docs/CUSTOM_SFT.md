@@ -185,6 +185,39 @@ tách rời bằng `data/raw/validation.jsonl` và code inference trong `inferen
 | `scripts/sft_base_1gpu.sh` | thêm `PYTHON` / `TORCHRUN`, preflight, lọc flag qua `tools/filter_train_args.py` |
 | `train/trainer.py` | import `apply_rotary_pos_emb_xdrope` thành tuỳ chọn; bỏ monkeypatch trên transformers ≥ 5.13 |
 | `train/train_hunyuan.py` | `resolve_submodules()` — bố cục module đổi tên ở transformers 5.13 |
+| `train/data_processor.py` | `position_ids` thành tuỳ chọn; viết lại `VLDataCollator` |
+| `scripts/sft_base_1gpu.sh` | thêm `PACKING=0` |
+| `tools/makedata_to_hyocr.py` | thêm `--flat` |
+
+### Packing không dùng được trên transformers phát hành
+
+`PackedVLDataCollator` truyền **cu_seqlens qua đúng chỗ của `attention_mask`**
+(`data_processor.py:360-366`) — chỉ có nghĩa với bản attention đã monkeypatch,
+mà bản đó không còn áp dụng được (xem mục trên). Nó cũng dựng `position_ids`
+dạng `[batch, 4, seq]` trong khi bản phát hành mong `[num_mrope_axes + 1, batch,
+seq]`. Hai thứ này không vá lặt vặt được.
+
+Thêm nữa, processor của transformers ≥ 5.13 **không trả `position_ids`** nữa
+(model tự dựng bằng `get_rope_index`). Code cũ đọc `inputs["position_ids"]` nên
+mọi mẫu đều ném `KeyError`, bị `__getitem__` nuốt thành
+`[WARNING] Skipping item in pack` — **mọi pack đều rỗng, train trên không có gì**.
+
+Nên trên transformers phát hành phải chạy không pack:
+
+```bash
+python tools/makedata_to_hyocr.py --root ... --prompt-file ... \
+    --out-dir ./data/flat --flat
+
+PACKING=0 TRAIN_DATA=./data/flat/train.jsonl GRAD_ACCUM=16 \
+    bash scripts/sft_base_1gpu.sh
+```
+
+`--flat` xuất `{"image","question","answer"}` — schema mà `VLDataset` đọc trực
+tiếp khi `is_packed=False`. `GRAD_ACCUM=16` để batch hiệu dụng xấp xỉ mức cũ
+(một pack 16384 token chứa cỡ 4 trang, giờ mỗi step một trang).
+
+Với 1.007 mẫu thì phần lãng phí do padding không đáng kể — packing là tối ưu
+throughput cho vòng train cỡ triệu mẫu.
 
 ### Bố cục module đổi tên
 

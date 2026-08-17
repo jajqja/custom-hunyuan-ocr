@@ -56,6 +56,17 @@ warmup_ratio=${WARMUP:-0.03}
 save_steps=${SAVE_STEPS:-50}
 pack_len=${PACK_LEN:-16384}
 
+# PACKING=0 tắt gộp nhiều trang vào một chuỗi. Bắt buộc trên transformers >= 5.13:
+# PackedVLDataCollator truyền cu_seqlens qua chỗ của attention_mask, thứ chỉ có
+# nghĩa với bản attention đã monkeypatch — mà bản đó không còn áp dụng được.
+# TRAIN_DATA khi đó phải là JSONL sinh bởi `makedata_to_hyocr.py --flat`.
+packing=${PACKING:-1}
+if [ "$packing" = "1" ]; then
+    pack_flags="--data_flatten True --data_packing True"
+else
+    pack_flags="--data_flatten False --data_packing False"
+fi
+
 # Which parts to train. Freezing the vision tower (TUNE_VISION=False) saves
 # roughly 15% of step time and is worth trying if the pages are clean scans.
 tune_vision=${TUNE_VISION:-True}
@@ -86,6 +97,7 @@ echo "  lr            : ${lr}"
 echo "  epochs        : ${num_epochs}"
 echo "  batch x accum : ${batch_size} x ${grad_accum_steps}"
 echo "  pack length   : ${pack_len}"
+echo "  packing       : ${packing}"
 echo "  tune v/m/l    : ${tune_vision} / ${tune_mlp} / ${tune_llm}"
 echo "  deepspeed     : ${DEEPSPEED:-off}"
 echo "========================================"
@@ -95,8 +107,7 @@ args="
     --model_name_or_path ${model_name_or_path} \
     --train_data_path ${train_data_path} \
     --image_folder ${image_path} \
-    --data_flatten True \
-    --data_packing True \
+    ${pack_flags} \
     --tune_mm_vision ${tune_vision} \
     --tune_mm_mlp ${tune_mlp} \
     --tune_mm_llm ${tune_llm} \

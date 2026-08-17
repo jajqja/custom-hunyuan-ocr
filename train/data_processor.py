@@ -229,7 +229,10 @@ class VLDataset(Dataset):
             "attention_mask": inputs["attention_mask"],
             "pixel_values": inputs.get("pixel_values", None),
             "image_grid_thw": inputs.get("image_grid_thw", None),
-            "position_ids": inputs["position_ids"],
+            # transformers >= 5.13 không trả position_ids nữa; model tự dựng bằng
+            # get_rope_index khi không được truyền vào. Thiếu key này mà đọc
+            # thẳng thì mọi mẫu đều ném KeyError rồi bị __getitem__ nuốt.
+            "position_ids": inputs.get("position_ids"),
             "labels": labels,
         }
 
@@ -379,52 +382,51 @@ class PackedVLDataCollator:
 
 
 class VLDataCollator:
-    """Custom data collator for vision-language data."""
+    """Gộp batch cho chế độ KHÔNG pack: pad tới độ dài lớn nhất trong batch.
+
+    Viết lại cho transformers >= 5.13:
+
+      - `attention_mask` từ processor có shape [1, L]; bản cũ `torch.cat` nó với
+        một tensor 1-D nên chỉ chạy được khi batch không cần pad, và ngay cả khi
+        đó vẫn stack ra [B, 1, L] lệch với input_ids [B, L].
+      - `pixel_values` của ảnh naflex có số patch khác nhau từng ảnh, `torch.stack`
+        đòi shape giống hệt nên vỡ với batch > 1. Đúng ra phải nối theo dim 0 và
+        để `image_grid_thw` cho model tách lại.
+      - Không truyền `position_ids`: model tự dựng mrope bằng get_rope_index.
+    """
 
     def __init__(self, processor: HunYuanVLProcessor, max_length: int = 2048):
         self.processor = processor
         self.max_length = max_length
 
+    @staticmethod
+    def _flat(t):
+        return t.reshape(-1) if t is not None and t.dim() > 1 else t
+
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        # Separate different types of inputs
-        input_ids = [f["input_ids"] for f in features]
-        attention_mask = [f["attention_mask"] for f in features]
-        labels = [f["labels"] for f in features]
-        pixel_values = [f["pixel_values"] for f in features if f["pixel_values"] is not None]
-        image_grid_thw = [f["image_grid_thw"] for f in features if f["image_grid_thw"] is not None]
-        [f["position_ids"] for f in features]
+        pad_id = self.processor.tokenizer.pad_token_id
+        ids = [self._flat(f["input_ids"])[: self.max_length] for f in features]
+        masks = [self._flat(f["attention_mask"])[: self.max_length] for f in features]
+        labels = [self._flat(f["labels"])[: self.max_length] for f in features]
+        max_len = max(len(x) for x in ids)
 
-        # Pad sequences
-        max_len = min(max(len(ids) for ids in input_ids), self.max_length)
-
-        padded_input_ids = []
-        padded_attention_mask = []
-        padded_labels = []
-
-        for ids, mask, label in zip(input_ids, attention_mask, labels):
-            padding_length = max_len - len(ids)
-            if padding_length > 0:
-                padded_input_ids.append(
-                    torch.cat([ids, torch.full((padding_length,), self.processor.tokenizer.pad_token_id)])
-                )
-                padded_attention_mask.append(torch.cat([mask, torch.zeros(padding_length, dtype=mask.dtype)]))
-                padded_labels.append(torch.cat([label, torch.full((padding_length,), -100)]))
-            else:
-                padded_input_ids.append(ids[:max_len])
-                padded_attention_mask.append(mask[:max_len])
-                padded_labels.append(label[:max_len])
+        def pad(seq, value, dtype):
+            out = torch.full((max_len,), value, dtype=dtype)
+            out[: len(seq)] = seq.to(dtype)
+            return out
 
         batch = {
-            "input_ids": torch.stack(padded_input_ids),
-            "attention_mask": torch.stack(padded_attention_mask),
-            "labels": torch.stack(padded_labels),
+            "input_ids": torch.stack([pad(x, pad_id, torch.long) for x in ids]),
+            "attention_mask": torch.stack([pad(x, 0, torch.long) for x in masks]),
+            "labels": torch.stack([pad(x, -100, torch.long) for x in labels]),
         }
 
+        pixel_values = [f["pixel_values"] for f in features if f.get("pixel_values") is not None]
+        grid = [f["image_grid_thw"] for f in features if f.get("image_grid_thw") is not None]
         if pixel_values:
-            batch["pixel_values"] = torch.stack(pixel_values)
-        if image_grid_thw:
-            batch["image_grid_thw"] = torch.stack(image_grid_thw)
-
+            batch["pixel_values"] = torch.cat(pixel_values, dim=0)
+        if grid:
+            batch["image_grid_thw"] = torch.cat(grid, dim=0)
         return batch
 
 
