@@ -170,10 +170,37 @@ chạy lại từ đầu thì đổi `RUN_NAME` hoặc xoá thư mục.
 
 ## 4. Đánh giá
 
-**Không bật `--eval_strategy steps`.** `train_hunyuan.py:198-205` tạo
-`eval_dataset` với `is_packed=False` (trả về dict lẻ) nhưng collator lúc đó là
-`PackedVLDataCollator` (chờ list-of-list) → vỡ ngay batch eval đầu tiên. Đánh giá
-tách rời bằng `data/raw/validation.jsonl` và code inference trong `inference/`.
+**Chỉ bật được khi `PACKING=0`.** `train_hunyuan.py:198-205` luôn tạo
+`eval_dataset` với `is_packed=False`; nếu packing bật thì collator là
+`PackedVLDataCollator` (chờ list-of-list) và vỡ ngay batch eval đầu. Ở chế độ
+không pack thì cả train lẫn eval dùng chung `VLDataCollator`, chạy được.
+
+```bash
+EVAL_DATA=./data/flat/validation.jsonl EVAL_STEPS=32 \
+PACKING=0 TRAIN_DATA=./data/flat/train.jsonl GRAD_ACCUM=16 \
+    bash scripts/sft_base_1gpu.sh
+```
+
+Chọn `EVAL_STEPS` theo số step một epoch, không theo con số tròn:
+
+| `EVAL_STEPS` | Số lần eval (315 step) | Thêm bao lâu |
+|---:|---:|---|
+| 16 | 20 | ~20 phút |
+| **32** | **10** (2 lần/epoch) | **~10 phút** |
+| 63 | 5 (1 lần/epoch) | ~5 phút |
+
+Mỗi lần eval là 120 forward pass ở batch 1, cỡ **40–60 giây**. `EVAL_STEPS=32`
+cho đủ 10 điểm để nhìn ra chỗ val loss quay đầu — đó là toàn bộ lý do bật eval
+với bộ 1.007 mẫu, nơi 5 epoch rất dễ overfit. Dày hơn 16 chỉ tốn thời gian.
+
+Muốn `--load_best_model_at_end` thì `SAVE_STEPS` phải là bội của `EVAL_STEPS`
+(đặt cả hai bằng 32); script không bật sẵn.
+
+`eval_loss` chỉ là proxy — nó đo teacher-forced next-token, không đo được
+model tự sinh ra Markdown đúng cấu trúc hay không. CER/WER thật phải chạy sinh
+văn bản trên `data/flat/validation.jsonl` bằng code trong `inference/` sau khi
+train xong, và **chấm riêng 3 mẫu nhãn rỗng bằng exact-match** vì CER không định
+nghĩa được khi reference rỗng.
 
 ## 5. Những chỗ đã sửa của upstream
 

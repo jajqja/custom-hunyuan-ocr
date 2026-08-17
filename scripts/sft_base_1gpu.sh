@@ -67,6 +67,21 @@ else
     pack_flags="--data_flatten False --data_packing False"
 fi
 
+# Eval trong lúc train. Chỉ chạy được khi PACKING=0: eval_dataset luôn được tạo
+# với is_packed=False, nên khi packing bật thì collator là PackedVLDataCollator
+# và nó vỡ ngay batch eval đầu tiên.
+eval_data=${EVAL_DATA:-}
+eval_steps=${EVAL_STEPS:-32}
+eval_batch=${EVAL_BATCH:-${BATCH_SIZE:-1}}
+eval_flags="--eval_strategy no"
+if [ -n "$eval_data" ]; then
+    if [ "$packing" = "1" ]; then
+        echo "[ERROR] EVAL_DATA cần PACKING=0."
+        exit 1
+    fi
+    eval_flags="--eval_data_path ${eval_data} --eval_strategy steps --eval_steps ${eval_steps}"
+fi
+
 # Which parts to train. Freezing the vision tower (TUNE_VISION=False) saves
 # roughly 15% of step time and is worth trying if the pages are clean scans.
 tune_vision=${TUNE_VISION:-True}
@@ -98,6 +113,7 @@ echo "  epochs        : ${num_epochs}"
 echo "  batch x accum : ${batch_size} x ${grad_accum_steps}"
 echo "  pack length   : ${pack_len}"
 echo "  packing       : ${packing}"
+echo "  eval          : ${eval_data:-off}${eval_data:+ mỗi ${eval_steps} step}"
 echo "  tune v/m/l    : ${tune_vision} / ${tune_mlp} / ${tune_llm}"
 echo "  deepspeed     : ${DEEPSPEED:-off}"
 echo "========================================"
@@ -115,9 +131,9 @@ args="
     --output_dir ${output_dir} \
     --num_train_epochs ${num_epochs} \
     --per_device_train_batch_size ${batch_size} \
-    --per_device_eval_batch_size ${batch_size} \
+    --per_device_eval_batch_size ${eval_batch} \
     --gradient_accumulation_steps ${grad_accum_steps} \
-    --eval_strategy no \
+    ${eval_flags} \
     --save_strategy steps \
     --save_steps ${save_steps} \
     --save_total_limit 3 \
