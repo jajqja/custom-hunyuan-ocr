@@ -239,6 +239,39 @@ Muốn so nhiều checkpoint thì chạy lại với `--model` khác nhau — m�
 | `scripts/sft_base_1gpu.sh` | thêm `PACKING=0` |
 | `tools/makedata_to_hyocr.py` | thêm `--flat` |
 
+### Serve bằng vLLM: phải vá `get_rope`
+
+Config gốc HunyuanOCR khai báo `{"type": "xdrope", "xdrope_section": [...]}`.
+transformers 5.x chuẩn hoá nó khi load thành
+`{"rope_type": "dynamic", "mrope_section": [...]}`, và vLLM đọc **bản đã chuẩn
+hoá** đó, nên `get_rope()` rơi vào nhánh `dynamic` + `alpha` → RoPE 1 chiều cho
+một model dùng position 4 trục. Engine chết ở `profile_run`:
+
+```
+view(..., 3*s18, -1, 128) is invalid for input of size 2048*s59
+# hoặc với --enforce-eager:
+rotary_embedding: query, key and positions must have the same batch_size and seq_len
+```
+
+Không sửa được bằng `config.json` — kiểm chứng: model gốc và bản đã SFT cho ra
+`rope_parameters` **giống hệt nhau** sau khi transformers load. Nhánh `xdrope`
+vẫn còn trong vLLM, chỉ là không config nào đi vào được nữa.
+
+```bash
+python tools/patch_vllm_xdrope.py --python /content/vllmenv/bin/python
+```
+
+Vá idempotent, có sao lưu `.hyocr.bak`, gỡ bằng `--revert`. Lúc deploy thì thêm
+dòng đó vào Dockerfile sau bước `pip install vllm`.
+
+Các mảnh khác của môi trường serve:
+
+| Thứ | Ràng buộc |
+|---|---|
+| vLLM | **≥ 0.26**. Bản 0.25.1 gọi `AutoImageProcessor.register("<chuỗi>", cls)`, transformers 5.15 đòi class → `AttributeError: 'str' object has no attribute '__module__'` |
+| flashinfer | `flashinfer-cubin` mới nhất (0.6.13) không khớp `flashinfer-python` (0.6.16+) và không có bản khớp. Đặt `FLASHINFER_DISABLE_VERSION_CHECK=1`; vô hại vì attention backend là FLASH_ATTN và ta sinh greedy |
+| model dir | phải qua `export_checkpoint.py` — `checkpoint-*` thiếu image processor |
+
 ### Packing không dùng được trên transformers phát hành
 
 `PackedVLDataCollator` truyền **cu_seqlens qua đúng chỗ của `attention_mask`**
