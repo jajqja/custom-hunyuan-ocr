@@ -115,8 +115,10 @@ pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
      "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 print("venv xong")"""),
 
-    ("md", """Từ đây mọi lệnh shell đều chạy với `PATH=$VENV/bin:$PATH`, để `python`
-và `torchrun` trong các script `scripts/*.sh` trỏ vào venv."""),
+    ("md", """Từ đây mọi lệnh gọi script đều truyền thẳng interpreter của venv
+(`PYTHON=$VENV/bin/python`, `TORCHRUN=$VENV/bin/torchrun`) thay vì dựa vào
+`PATH`. Cả hai script cũng tự kiểm tra interpreter trước khi chạy và báo lỗi
+rõ ràng nếu thiếu gói, thay vì để traceback rơi ra giữa chừng."""),
     ("code", """!$VENV/bin/python -c "import torch, flash_attn; \\
 print('torch', torch.__version__, '| cuda', torch.version.cuda, \\
       '| flash_attn', flash_attn.__version__, '| gpu', torch.cuda.get_device_name(0))\""""),
@@ -153,7 +155,7 @@ print(prompt)"""),
 
 `NUM_PROCESSES=2` chứ không phải 32: Colab chỉ có ~12 vCPU và mỗi process load
 một processor riêng. Mất 10–20 phút vì phải mở từng ảnh để đếm vision token."""),
-    ("code", """!PATH=$VENV/bin:$PATH \\
+    ("code", """!PYTHON=$VENV/bin/python \\
  MODEL_PATH=$MODEL_DIR \\
  INPUT_LIST=$WORK/data/data_list.txt \\
  PACK_OUTPUT=$WORK/data/packed/train_$PACK_LEN.jsonl \\
@@ -178,7 +180,8 @@ subprocess.Popen(f"while true; do rsync -a --delete {WORK}/output/ {DRIVE_DIR}/;
 print("rsync nền đã chạy")"""),
     ("code", """%load_ext tensorboard
 %tensorboard --logdir $WORK/output"""),
-    ("code", """!PATH=$VENV/bin:$PATH \\
+    ("code", """!PYTHON=$VENV/bin/python \\
+ TORCHRUN=$VENV/bin/torchrun \\
  MODEL_PATH=$MODEL_DIR \\
  TRAIN_DATA=$WORK/data/packed/train_$PACK_LEN.jsonl \\
  PACK_LEN=$PACK_LEN \\

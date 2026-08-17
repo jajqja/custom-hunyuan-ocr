@@ -31,6 +31,22 @@ model_name_or_path=${MODEL_PATH:?set MODEL_PATH to the HunyuanOCR base model dir
 train_data_path=${TRAIN_DATA:-./data/packed/train_16384.jsonl}
 image_path="not_needed"    # packed records carry absolute image paths
 
+# Interpreter / launcher. Set these when the deps live in a venv that is not on
+# PATH:  PYTHON=/content/venv/bin/python TORCHRUN=/content/venv/bin/torchrun
+PYTHON=${PYTHON:-python}
+TORCHRUN=${TORCHRUN:-torchrun}
+
+# Fail here rather than after the model has started loading. A missing
+# flash_attn almost always means the wrong interpreter, not a missing install.
+if ! "$PYTHON" -c "import torch, flash_attn, transformers" 2>/dev/null; then
+    echo "[ERROR] $PYTHON thiếu torch / flash_attn / transformers."
+    echo "        Dùng venv thì truyền vào:"
+    echo "            PYTHON=/content/venv/bin/python \\"
+    echo "            TORCHRUN=/content/venv/bin/torchrun bash scripts/sft_base_1gpu.sh"
+    echo "        hoặc đặt PATH=/content/venv/bin:\$PATH trước lệnh."
+    exit 1
+fi
+
 # ────────────── Hyperparameters ──────────────
 lr=${LR:-2e-5}
 batch_size=${BATCH_SIZE:-1}
@@ -108,7 +124,7 @@ args="
     --report_to tensorboard ${deepspeed_arg}"
 
 # ────────────── Launch ──────────────
-torchrun --nproc_per_node="${NPROC_PER_NODE}" \
+"${TORCHRUN}" --nproc_per_node="${NPROC_PER_NODE}" \
          --master_addr="${MASTER_ADDR}" \
          --master_port="${MASTER_PORT}" \
          --node_rank="${NODE_RANK}" \

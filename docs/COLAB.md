@@ -163,8 +163,19 @@ print(torch.__version__, torch.version.cuda, flash_attn.__version__)"
 `nvidia-smi` báo "CUDA Version: 13.0" là **phiên bản driver hỗ trợ**, không phải
 CUDA mà torch được build — driver 580.x chạy binary cu12.8 bình thường.
 
-**Từ đây mọi lệnh shell đều thêm `PATH=$VENV/bin:$PATH`**, để `python` và
-`torchrun` trong `scripts/*.sh` trỏ vào venv chứ không vào Python hệ thống.
+**Từ đây mọi lệnh gọi script đều truyền thẳng interpreter của venv** —
+`PYTHON=$VENV/bin/python`, và thêm `TORCHRUN=$VENV/bin/torchrun` cho bước train.
+Trước đây chỗ này dùng `PATH=$VENV/bin:$PATH`; cách đó im lặng rơi về Python hệ
+thống nếu prefix bị rớt, và lỗi chỉ lộ ra dưới dạng
+`ModuleNotFoundError: No module named 'binpacking'` từ giữa file packer.
+
+`pack_data.sh` và `sft_base_1gpu.sh` giờ kiểm tra interpreter trước khi chạy:
+
+```
+[ERROR] python (/usr/bin/python3) thiếu binpacking / transformers / Pillow.
+        Dùng venv thì truyền interpreter của nó vào:
+            PYTHON=/content/venv/bin/python bash scripts/pack_data.sh
+```
 
 ## 5. Đăng nhập HF, tải model + dataset
 
@@ -214,7 +225,7 @@ print(prompt[:120], "...")
 Ra 1.007 dòng train / 120 dòng validation, `thiếu ảnh` phải là 0.
 
 ```bash
-!PATH=$VENV/bin:$PATH \
+!PYTHON=$VENV/bin/python \
  MODEL_PATH=/content/HunyuanOCR \
  INPUT_LIST=/content/hyocr/data/data_list.txt \
  PACK_OUTPUT=/content/hyocr/data/packed/train_${PACK_LEN}.jsonl \
@@ -251,7 +262,8 @@ subprocess.Popen(
 ```
 
 ```bash
-!PATH=$VENV/bin:$PATH \
+!PYTHON=$VENV/bin/python \
+ TORCHRUN=$VENV/bin/torchrun \
  MODEL_PATH=/content/HunyuanOCR \
  TRAIN_DATA=/content/hyocr/data/packed/train_${PACK_LEN}.jsonl \
  PACK_LEN=$PACK_LEN \
@@ -302,7 +314,7 @@ gọi `processor.save_pretrained`), đủ để load lại bằng
 
 | Triệu chứng | Nguyên nhân |
 |---|---|
-| `ModuleNotFoundError: flash_attn` lúc load model | đang chạy bằng Python hệ thống chứ không phải venv — thiếu `PATH=$VENV/bin:$PATH` |
+| `ModuleNotFoundError` bất kỳ gói nào | đang chạy bằng Python hệ thống chứ không phải venv — thiếu `PYTHON=$VENV/bin/python` (và `TORCHRUN=...` khi train) |
 | `pick_flash_attn.py` báo không có wheel nào | nền tảng lạ (aarch64, cp313 mới) — build from source là đường duy nhất |
 | `RuntimeError: Default process group has not been initialized` | chạy `python train/train_hunyuan.py` trực tiếp. Phải qua `torchrun` (script đã lo), vì `train_hunyuan.py:182` gọi `torch.distributed.get_rank()` |
 | Pack ra 0 dòng | đường dẫn ảnh trong `data/raw/*.jsonl` là tuyệt đối của máy cũ — phải chạy lại converter trên Colab |

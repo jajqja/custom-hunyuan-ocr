@@ -26,6 +26,9 @@ EMPTY_FLAG=""
 [ "$ALLOW_EMPTY" = "1" ] && EMPTY_FLAG="--allow-empty-answer"
 # Run in the foreground when FOREGROUND=1 (easier to watch on one machine).
 FOREGROUND=${FOREGROUND:-0}
+# Interpreter to run the packer with. Set PYTHON=/path/to/venv/bin/python when
+# the deps live in a venv that is not on PATH.
+PYTHON=${PYTHON:-python}
 
 # ────────────── Sanity check ──────────────
 if [ ! -f "$INPUT_LIST" ]; then
@@ -37,6 +40,18 @@ fi
 if [ ! -d "$MODEL_PATH" ]; then
     echo "[ERROR] base model dir not found: $MODEL_PATH"
     echo "Please set MODEL_PATH to your HunyuanOCR base model directory."
+    exit 1
+fi
+
+# Fail here with a readable message rather than a traceback 30 lines into the
+# packer. Getting the wrong interpreter is the usual cause: the deps are in a
+# venv but PATH still points at the system python.
+if ! "$PYTHON" -c "import binpacking, transformers, PIL" 2>/dev/null; then
+    echo "[ERROR] $PYTHON ($("$PYTHON" -c 'import sys;print(sys.executable)' 2>/dev/null || echo '?'))"
+    echo "        thiếu binpacking / transformers / Pillow."
+    echo "        Dùng venv thì truyền interpreter của nó vào:"
+    echo "            PYTHON=/content/venv/bin/python bash scripts/pack_data.sh"
+    echo "        hoặc đặt PATH=/content/venv/bin:\$PATH trước lệnh."
     exit 1
 fi
 
@@ -54,7 +69,7 @@ echo "  Log              : $LOG_FILE"
 echo "========================================"
 
 # ────────────── Run ──────────────
-cmd=(python tools/pipeline_count_and_pack.py
+cmd=("$PYTHON" tools/pipeline_count_and_pack.py
     --input-list "$INPUT_LIST"
     --model-path "$MODEL_PATH"
     --count-output-dir "$COUNT_OUTPUT_DIR"
