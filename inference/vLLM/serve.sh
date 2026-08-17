@@ -25,6 +25,8 @@ GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.9}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-131072}
 SERVED_NAME=${SERVED_NAME:-tencent/HunyuanOCR}
 LOG=${LOG:-vllm_${PORT}.log}
+# Cờ tuỳ ý cho vllm serve, vd EXTRA_ARGS="--enforce-eager" khi torch.compile vỡ.
+EXTRA_ARGS=${EXTRA_ARGS:-}
 
 echo "========================================"
 echo "  HunyuanOCR-1.5 vLLM serve"
@@ -34,6 +36,7 @@ echo "  gpu / port    : ${GPU} / ${PORT}"
 echo "  gpu_mem_util  : ${GPU_MEM_UTIL}"
 echo "  max_model_len : ${MAX_MODEL_LEN}"
 echo "  log           : ${LOG}"
+echo "  extra args    : ${EXTRA_ARGS:-—}"
 echo "========================================"
 
 # Local weights: disable network lookups to speed up startup.
@@ -49,6 +52,7 @@ CUDA_VISIBLE_DEVICES=${GPU} nohup vllm serve "${MODEL_PATH}" \
     --gpu-memory-utilization "${GPU_MEM_UTIL}" \
     --max-model-len "${MAX_MODEL_LEN}" \
     --max-num-batched-tokens "${MAX_MODEL_LEN}" \
+    ${EXTRA_ARGS} \
     > "${LOG}" 2>&1 &
 
 echo "[started] pid=$!  log=${LOG}"
