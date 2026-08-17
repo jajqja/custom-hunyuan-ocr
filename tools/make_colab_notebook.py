@@ -19,7 +19,9 @@ print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=c
 GB = torch.cuda.get_device_properties(0).total_memory / 1024**3
 PACK_LEN = 16384 if GB >= 70 else 8192 if GB >= 35 else 4096
 print(f"{GB:.0f} GB -> PACK_LEN={PACK_LEN}")
-# Colab cấp A100-40GB, không phải 80GB. PACK_LEN=8192 ~ 2 trang/pack, đúng như mong đợi."""),
+# Colab cấp A100 cả bản 40GB lẫn 80GB tuỳ lần, nên đừng đặt cứng: 80GB -> 16384,
+# 40GB -> 8192 (~2 trang/pack, bình thường). Trên 80GB có thể thử 20480 sau khi
+# xem headroom ở lần chạy đầu."""),
 
     ("md", "## 2. Cấu hình — **sửa hai dòng dưới**"),
     ("code", """DATASET_REPO = "<user>/vietnamese-doc-ocr"   # repo dataset đã đẩy lên HF
@@ -51,20 +53,33 @@ import os; os.makedirs(DRIVE_DIR, exist_ok=True)"""),
     ("md", """`flash-attn` bắt buộc: `train/trainer.py:3` import `flash_attn_varlen_func`
 ngay đầu module và `train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"`.
 Build from source mất 40–60 phút, nên lấy wheel dựng sẵn khớp runtime."""),
-    ("code", """import sys, torch, subprocess
+    ("code", """import subprocess, sys, torch, urllib.request
 
-ver = "2.8.3"
 tv  = ".".join(torch.__version__.split("+")[0].split(".")[:2])
 cu  = "cu" + torch.version.cuda.split(".")[0]
 abi = "TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE"
 py  = f"cp{sys.version_info.major}{sys.version_info.minor}"
-whl = (f"https://github.com/Dao-AILab/flash-attention/releases/download/v{ver}/"
-       f"flash_attn-{ver}+{cu}torch{tv}cxx11abi{abi}-{py}-{py}-linux_x86_64.whl")
-print(whl)
-subprocess.run(["pip", "install", "-q", whl], check=True)
+print(f"runtime: torch {tv} / {cu} / cxx11abi{abi} / {py}")
 
-# 404 = tổ hợp torch/CUDA/Python này chưa có wheel. Chọn tay ở
-# https://github.com/Dao-AILab/flash-attention/releases theo 4 mảnh in ra trên."""),
+BASE = "https://github.com/Dao-AILab/flash-attention/releases/download"
+def wheel_url(v):
+    return (f"{BASE}/v{v}/flash_attn-{v}+{cu}torch{tv}"
+            f"cxx11abi{abi}-{py}-{py}-linux_x86_64.whl")
+
+whl = None
+for v in ("2.8.3", "2.8.2", "2.8.1", "2.8.0", "2.7.4.post1"):
+    u = wheel_url(v)
+    try:
+        urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=20)
+        whl = u
+        break
+    except Exception:
+        print("  không có:", u.rsplit("/", 1)[1])
+
+assert whl, ("Không có wheel khớp runtime này. Chọn tay ở "
+             "https://github.com/Dao-AILab/flash-attention/releases theo 4 mảnh in ra trên.")
+print("cài:", whl)
+subprocess.run(["pip", "install", "-q", whl], check=True)"""),
     ("code", """from flash_attn.flash_attn_interface import flash_attn_varlen_func
 print("flash-attn OK")"""),
 

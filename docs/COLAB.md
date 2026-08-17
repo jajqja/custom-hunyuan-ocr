@@ -4,9 +4,9 @@ Bản Colab của [`CUSTOM_SFT.md`](./CUSTOM_SFT.md). Notebook tương ứng:
 [`notebooks/hyocr_sft_colab.ipynb`](../notebooks/hyocr_sft_colab.ipynb) — tải lên
 Colab rồi chạy từ trên xuống.
 
-> **Colab cấp A100 40GB, không phải 80GB.** Runtime "A100" của Colab Pro/Pro+ là
-> A100-SXM4-**40GB**. Chỉ Colab Enterprise (Vertex AI) mới chọn được A100-80GB
-> hay H100. `PACK_LEN` phải hạ theo, xem bước 1.
+> **Runtime "A100" của Colab có thể là bản 40GB hoặc 80GB, không đoán trước
+> được.** Đừng đặt cứng `PACK_LEN` — bước 1 đo VRAM rồi chọn. Cùng một tài khoản
+> lần này ra A100-SXM4-80GB thì lần sau vẫn có thể ra 40GB.
 
 ---
 
@@ -29,6 +29,11 @@ print(f"{GB:.0f} GB -> PACK_LEN={PACK_LEN}")
 Mỗi trang A4 200 DPI tốn phần lớn ngân sách token vào vision token, nên
 `PACK_LEN=8192` trên 40GB nghĩa là khoảng 2 trang một pack. Đó là bình thường —
 đừng ép lên 16384 trên 40GB, sẽ OOM giữa chừng chứ không phải ngay từ step đầu.
+
+Được **A100-80GB** thì `PACK_LEN=16384` là mặc định của bước này, giống hệt
+`sft_base_1gpu.sh` trên máy riêng. Chạy hết epoch đầu, xem `nvidia-smi` còn dư
+nhiều thì pack lại ở 20480 — doc upstream nói mức đó vẫn OOM được ở 80GB nên
+phải đo chứ đừng đặt thẳng.
 
 ## 2. Gắn Drive
 
@@ -65,21 +70,42 @@ làm ở bước 7: lưu vào `/content`, đồng bộ sang Drive bằng một v
 from source trên Colab mất 40–60 phút mỗi session, nên phải lấy wheel dựng sẵn:
 
 ```python
-import sys, torch, subprocess
-ver  = "2.8.3"
-tv   = ".".join(torch.__version__.split("+")[0].split(".")[:2])
-cu   = "cu" + torch.version.cuda.split(".")[0]
-abi  = "TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE"
-py   = f"cp{sys.version_info.major}{sys.version_info.minor}"
-whl  = (f"https://github.com/Dao-AILab/flash-attention/releases/download/v{ver}/"
-        f"flash_attn-{ver}+{cu}torch{tv}cxx11abi{abi}-{py}-{py}-linux_x86_64.whl")
-print(whl)
+import subprocess, sys, torch, urllib.request
+
+tv  = ".".join(torch.__version__.split("+")[0].split(".")[:2])
+cu  = "cu" + torch.version.cuda.split(".")[0]
+abi = "TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE"
+py  = f"cp{sys.version_info.major}{sys.version_info.minor}"
+print(f"runtime: torch {tv} / {cu} / cxx11abi{abi} / {py}")
+
+BASE = "https://github.com/Dao-AILab/flash-attention/releases/download"
+def wheel_url(v):
+    return (f"{BASE}/v{v}/flash_attn-{v}+{cu}torch{tv}"
+            f"cxx11abi{abi}-{py}-{py}-linux_x86_64.whl")
+
+whl = None
+for v in ("2.8.3", "2.8.2", "2.8.1", "2.8.0", "2.7.4.post1"):
+    u = wheel_url(v)
+    try:
+        urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=20)
+        whl = u
+        break
+    except Exception:
+        print("  không có:", u.rsplit("/", 1)[1])
+
+assert whl, "Không có wheel khớp runtime này — chọn tay ở releases page."
+print("cài:", whl)
 subprocess.run(["pip", "install", "-q", whl], check=True)
 ```
 
-Nếu URL 404 thì tổ hợp torch/CUDA/Python của runtime hôm đó chưa có wheel — mở
+Đoạn trên dò ngược vài bản flash-attn thay vì đóng cứng một version, vì mảnh
+`cu` lấy từ `torch.version.cuda` — runtime CUDA 13 sẽ tìm `cu13`, mà không phải
+bản flash-attn nào cũng phát hành wheel `cu13`. Không tìm được thì mở
 https://github.com/Dao-AILab/flash-attention/releases chọn tay file khớp
 `torch{tv}`, `{cu}`, `cxx11abi{abi}`, `{py}` in ra ở trên.
+
+Lưu ý `nvidia-smi` báo "CUDA Version: 13.0" là **phiên bản driver hỗ trợ**, không
+phải CUDA mà torch được build. Mảnh dùng để chọn wheel là `torch.version.cuda`.
 
 Kiểm tra:
 
@@ -183,7 +209,7 @@ subprocess.Popen(
 `SAVE_STEPS=25` thay vì 50 vì session Colab có thể chết bất cứ lúc nào — mất tối
 đa 25 step thay vì 50.
 
-Trên 40GB mà vẫn OOM, thử theo thứ tự này:
+OOM thì thử theo thứ tự này (từ 80GB hạ về 8192 trước, từ 40GB hạ về 4096):
 
 ```bash
 TUNE_VISION=False ...                  # đóng băng vision tower, rẻ nhất
