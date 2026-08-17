@@ -65,10 +65,27 @@ def restore_rope(out_cfg, base_cfg):
         if isinstance(cur.get(sub), dict) and isinstance(base.get(sub), dict):
             fix(cur[sub], base[sub], f"{sub}.")
 
+    # vLLM nhận diện xdrope bằng `uses_xdrope_dim()`, hàm này tìm khoá tên
+    # `xdrope_section` ở thuộc tính cấp cao nhất hoặc trong dict `rope_scaling`.
+    # transformers 5.x dời rope_scaling sang rope_parameters (rope_scaling trở
+    # thành None) và đổi tên section thành `mrope_section`, nên cả hai chỗ đều
+    # trượt -> uses_xdrope_dim = 0 -> runner cấp buffer position 3 trục cho một
+    # model cần 4 -> IndexError. Một khoá cấp cao nhất là đủ: PretrainedConfig
+    # giữ nguyên mọi khoá lạ thành thuộc tính.
+    section = None
+    for src in (base, cur):
+        for holder in (src, src.get("text_config") or {}):
+            for k in ROPE_KEYS:
+                d = holder.get(k) or {}
+                section = section or d.get("xdrope_section") or d.get("mrope_section")
+    if section and cur.get("xdrope_section") != section:
+        cur["xdrope_section"] = section
+        changed.append("xdrope_section (cấp cao nhất, cho vLLM)")
+
     if changed:
         with open(out_cfg, "w", encoding="utf-8") as fh:
             json.dump(cur, fh, ensure_ascii=False, indent=2)
-        print(f"khôi phục rope : {', '.join(changed)} (lấy từ {base_cfg})")
+        print(f"khôi phục rope : {', '.join(changed)}")
 
 
 def main():

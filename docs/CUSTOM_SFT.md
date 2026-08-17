@@ -257,12 +257,34 @@ Không sửa được bằng `config.json` — kiểm chứng: model gốc và b
 `rope_parameters` **giống hệt nhau** sau khi transformers load. Nhánh `xdrope`
 vẫn còn trong vLLM, chỉ là không config nào đi vào được nữa.
 
+vLLM **có** hỗ trợ xdrope đầy đủ — `hunyuan_vision.get_xdrope_input_positions()`
+dựng đủ 4 trục, và runner có buffer `xdrope_positions` riêng. Hỏng nằm ở khâu
+nhận diện: `uses_xdrope_dim()` tìm khoá tên `xdrope_section`, mà transformers
+5.x đổi thành `mrope_section` **và** dời `rope_scaling` sang `rope_parameters`
+(`config.rope_scaling` trở thành `None`). Cả hai chỗ đều trượt → trả 0 → runner
+cấp buffer 3 trục cho model cần 4 → `IndexError: index 3 is out of bounds`.
+
+Cần cả hai mảnh:
+
 ```bash
+python tools/export_checkpoint.py ...          # thêm xdrope_section cấp cao nhất
 python tools/patch_vllm_xdrope.py --python /content/vllmenv/bin/python
 ```
 
-Vá idempotent, có sao lưu `.hyocr.bak`, gỡ bằng `--revert`. Lúc deploy thì thêm
-dòng đó vào Dockerfile sau bước `pip install vllm`.
+`export_checkpoint.py` ghi `"xdrope_section": [16,16,16,16]` ở **cấp cao nhất**
+của config — `PretrainedConfig` giữ nguyên khoá lạ thành thuộc tính, nên
+`getattr(config, "xdrope_section")` bắt được và `uses_xdrope_dim` trả 4.
+
+`patch_vllm_xdrope.py` vá hai chỗ trong vLLM:
+
+| File | Sửa |
+|---|---|
+| `rotary_embedding/__init__.py` | `get_rope()`: `dynamic` + `mrope_section` + `alpha` → chuyển sang nhánh `xdrope` |
+| `models/hunyuan_vision.py` | `xd_num = len(hf_config.rope_scaling["xdrope_section"])` → đọc mềm, `rope_scaling` giờ là `None` |
+
+Idempotent, sao lưu `.hyocr.bak`, gỡ bằng `--revert`, và **kiểm tra file sau khi
+vá có parse được không trước khi ghi** — thụt lề sai vẫn ghi được nhưng chỉ vỡ
+lúc import. Lúc deploy thì thêm cả hai dòng vào Dockerfile sau `pip install vllm`.
 
 Các mảnh khác của môi trường serve:
 
