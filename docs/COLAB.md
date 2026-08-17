@@ -74,25 +74,63 @@ Hai lý do:
    kernel. Trong venv thì không đụng gì tới runtime.
 
 ```python
-import json, subprocess, sys
+import json, os, subprocess, sys
 
 VENV = "/content/venv"
+PY = f"{VENV}/bin/python"
+
+
+def run(cmd, quiet=False):
+    r = subprocess.run(cmd, text=True, capture_output=True)
+    if r.returncode and not quiet:
+        print("$", " ".join(cmd))
+        print(r.stdout[-3000:], r.stderr[-3000:], sep="")
+    return r.returncode
+
+
+UV = False
+if run([sys.executable, "-m", "venv", VENV], quiet=True) != 0:
+    print("stdlib venv không dùng được -> chuyển sang uv")
+    assert run([sys.executable, "-m", "pip", "install", "-q", "uv"]) == 0
+    assert run([sys.executable, "-m", "uv", "venv", "--seed", VENV]) == 0
+    UV = True
+assert os.path.exists(PY), "không tạo được venv"
+
+
+def pipi(*args):
+    cmd = ([sys.executable, "-m", "uv", "pip", "install", "-q", "--python", PY, *args]
+           if UV else [PY, "-m", "pip", "install", "-q", *args])
+    assert run(cmd) == 0, f"cài thất bại: {args[0]}"
+
+
 plan = json.loads(subprocess.run(
     [sys.executable, "tools/pick_flash_attn.py", "--plan"],
     capture_output=True, text=True, check=True).stdout)
 print(json.dumps(plan, indent=2))
 
-PY  = f"{VENV}/bin/python"
-pip = lambda *a: subprocess.run([PY, "-m", "pip", "install", "-q", *a], check=True)
-
-subprocess.run([sys.executable, "-m", "venv", VENV], check=True)
-pip("-U", "pip", "setuptools", "wheel")
-pip(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
-pip(plan["wheel"])
-pip("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
-    "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
-    "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
+if not UV:
+    pipi("-U", "pip", "setuptools", "wheel")
+pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
+pipi(plan["wheel"])
+pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
+     "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
+     "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 ```
+
+**`python -m venv` trên Colab thường hỏng.** Debian/Ubuntu tách `ensurepip` ra
+gói `python3-venv` riêng, ảnh Colab không cài, nên stdlib venv thoát với mã 1.
+Cell trên bắt lỗi đó và chuyển sang `uv venv --seed` (uv tự mang pip nên không
+cần `ensurepip`), đồng thời cài gói bằng `uv pip` — nhanh hơn `pip` đáng kể khi
+phải kéo về ~6 GB torch.
+
+Cách khác nếu muốn giữ stdlib venv:
+
+```bash
+!apt-get install -qq -y python3.12-venv
+```
+
+Mọi lệnh cài đều **in stdout/stderr khi lỗi** thay vì chỉ ném
+`CalledProcessError` không kèm thông tin gì.
 
 `--plan` hỏi GitHub Releases API xem bản torch mới nhất nào **còn wheel**, rồi
 trả về JSON:

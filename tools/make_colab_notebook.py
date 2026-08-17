@@ -65,24 +65,55 @@ Dựng venv sạch thay vì cài đè lên Python của Colab, vì hai lý do:
    restart kernel. Trong venv thì không ảnh hưởng gì.
 
 `--plan` hỏi GitHub Releases API xem bản torch mới nhất nào còn wheel, rồi cài
-đúng bộ đó vào venv. Không đoán tên file, nên không mục theo thời gian."""),
-    ("code", """import json, subprocess, sys
+đúng bộ đó vào venv. Không đoán tên file, nên không mục theo thời gian.
+
+Nếu `python -m venv` hỏng (Colab hay thiếu `ensurepip` vì Debian tách nó ra gói
+`python3-venv`), cell tự chuyển sang `uv venv --seed`. Mọi lệnh cài đều in
+stdout/stderr khi lỗi thay vì chỉ ném `CalledProcessError`."""),
+    ("code", """import json, os, subprocess, sys
+
+VENV = "/content/venv"
+PY = f"{VENV}/bin/python"
+
+
+def run(cmd, quiet=False):
+    r = subprocess.run(cmd, text=True, capture_output=True)
+    if r.returncode and not quiet:
+        print("$", " ".join(cmd))
+        print(r.stdout[-3000:], r.stderr[-3000:], sep="")
+    return r.returncode
+
+
+# Tạo venv. `python -m venv` trên Colab hay hỏng vì Debian tách ensurepip ra gói
+# python3-venv riêng; uv tự mang pip nên không phụ thuộc vào đó.
+UV = False
+if run([sys.executable, "-m", "venv", VENV], quiet=True) != 0:
+    print("stdlib venv không dùng được (thường thiếu ensurepip) -> chuyển sang uv")
+    assert run([sys.executable, "-m", "pip", "install", "-q", "uv"]) == 0
+    assert run([sys.executable, "-m", "uv", "venv", "--seed", VENV]) == 0
+    UV = True
+assert os.path.exists(PY), "không tạo được venv"
+print("venv:", PY, "| uv:", UV)
+
+
+def pipi(*args):
+    cmd = ([sys.executable, "-m", "uv", "pip", "install", "-q", "--python", PY, *args]
+           if UV else [PY, "-m", "pip", "install", "-q", *args])
+    assert run(cmd) == 0, f"cài thất bại: {args[0]}"
+
 
 plan = json.loads(subprocess.run(
     [sys.executable, "tools/pick_flash_attn.py", "--plan"],
     capture_output=True, text=True, check=True).stdout)
 print(json.dumps(plan, indent=2))
 
-PY = f"{VENV}/bin/python"
-pip = lambda *a: subprocess.run([PY, "-m", "pip", "install", "-q", *a], check=True)
-
-subprocess.run([sys.executable, "-m", "venv", VENV], check=True)
-pip("-U", "pip", "setuptools", "wheel")
-pip(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
-pip(plan["wheel"])
-pip("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
-    "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
-    "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
+if not UV:
+    pipi("-U", "pip", "setuptools", "wheel")
+pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
+pipi(plan["wheel"])
+pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
+     "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
+     "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 print("venv xong")"""),
 
     ("md", """Từ đây mọi lệnh shell đều chạy với `PATH=$VENV/bin:$PATH`, để `python`
