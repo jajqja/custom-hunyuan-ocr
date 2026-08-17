@@ -233,6 +233,9 @@ class VLDataset(Dataset):
             # get_rope_index khi không được truyền vào. Thiếu key này mà đọc
             # thẳng thì mọi mẫu đều ném KeyError rồi bị __getitem__ nuốt.
             "position_ids": inputs.get("position_ids"),
+            # transformers >= 5.13 bắt buộc có khi truyền image_grid_thw: nó cho
+            # compute_3d_position_ids biết token nào là ảnh để dựng mrope.
+            "mm_token_type_ids": inputs.get("mm_token_type_ids"),
             "labels": labels,
         }
 
@@ -420,6 +423,12 @@ class VLDataCollator:
             "attention_mask": torch.stack([pad(x, 0, torch.long) for x in masks]),
             "labels": torch.stack([pad(x, -100, torch.long) for x in labels]),
         }
+
+        # Vị trí pad bị attention_mask loại trước khi dùng, nên pad bằng 0 (token
+        # loại "text") là an toàn.
+        if features[0].get("mm_token_type_ids") is not None:
+            mm = [self._flat(f["mm_token_type_ids"])[: self.max_length] for f in features]
+            batch["mm_token_type_ids"] = torch.stack([pad(x, 0, torch.long) for x in mm])
 
         pixel_values = [f["pixel_values"] for f in features if f.get("pixel_values") is not None]
         grid = [f["image_grid_thw"] for f in features if f.get("image_grid_thw") is not None]
