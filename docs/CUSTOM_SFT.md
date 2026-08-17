@@ -181,7 +181,39 @@ tách rời bằng `data/raw/validation.jsonl` và code inference trong `inferen
 |---|---|
 | `scripts/sft_base.sh:106`, `sft_dflash.sh:127`, `sft_dflash_finetune.sh:140` | `${entry_file} "${args}"` → bỏ nháy. Có nháy thì toàn bộ flag thành **một** phần tử `argv`, `HfArgumentParser.parse_args_into_dataclasses()` chết ngay. |
 | `tools/pipeline_count_and_pack.py` | thêm `--allow-empty-answer` |
-| `scripts/pack_data.sh` | thêm `ALLOW_EMPTY`, `FOREGROUND` |
+| `scripts/pack_data.sh` | thêm `ALLOW_EMPTY`, `FOREGROUND`, `PYTHON` |
+| `scripts/sft_base_1gpu.sh` | thêm `PYTHON` / `TORCHRUN`, preflight, lọc flag qua `tools/filter_train_args.py` |
+| `train/trainer.py` | import `apply_rotary_pos_emb_xdrope` thành tuỳ chọn; bỏ monkeypatch trên transformers ≥ 5.13 |
+
+### Vì sao phải lọc flag
+
+`transformers.TrainingArguments` đổi giữa 4.x và 5.x: `warmup_ratio` gộp vào
+`warmup_steps` (float trong [0,1) là tỷ lệ), `logging_dir` bỏ hẳn.
+`HfArgumentParser` gặp flag lạ là abort **trước khi** load model:
+
+```
+ValueError: Some specified arguments are not used by the HfArgumentParser:
+['--warmup_ratio', '0.03', '--logging_dir', './output/colab_run/tensorboard/...']
+```
+
+`tools/filter_train_args.py` đối chiếu với dataclass thật của bản đang cài, đổi
+tên khi có ánh xạ và bỏ flag không nhận, có in cảnh báo ra stderr chứ không âm
+thầm.
+
+### Vì sao bỏ monkeypatch attention
+
+`hunyuan_vl` chỉ lên transformers từ **5.13.0**, và lên với tên khác:
+`xdrope_section` → `mrope_section`, `apply_rotary_pos_emb_xdrope` →
+`apply_multimodal_rotary_pos_emb`, `HunYuanVLAttention` →
+`HunYuanVLDenseV1Attention`. Không bản phát hành nào từng có cái tên repo import,
+nên `transformers>=4.57.0` trong `requirements.txt` không wheel nào thoả được —
+code train viết cho một nhánh pre-merge.
+
+May là bản patch giờ thừa: `HunYuanVLDenseV1Attention` đã đi qua
+`ALL_ATTENTION_FUNCTIONS` (nên `flash_attention_2` có hiệu lực) và
+`HunYuanVLModel.forward` đã nhận diện packed position_ids
+(`ndim == 3 and shape[0] == num_mrope_axes + 1`) để dựng mask — đúng những gì
+patch sinh ra để làm.
 
 ## 6. Ghi chú về quy mô
 

@@ -123,6 +123,11 @@ args="
     --logging_dir ${TENSORBOARD_DIR} \
     --report_to tensorboard ${deepspeed_arg}"
 
+# ────────────── Lọc flag theo transformers đang cài ──────────────
+# TrainingArguments đổi tên giữa 4.x và 5.x (warmup_ratio -> warmup_steps,
+# logging_dir bị bỏ). HfArgumentParser gặp flag lạ là abort ngay, nên lọc trước.
+args=$("$PYTHON" tools/filter_train_args.py ${args})
+
 # ────────────── Launch ──────────────
 "${TORCHRUN}" --nproc_per_node="${NPROC_PER_NODE}" \
          --master_addr="${MASTER_ADDR}" \
