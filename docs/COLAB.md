@@ -228,7 +228,7 @@ Ra 1.007 dòng train / 120 dòng validation, `thiếu ảnh` phải là 0.
 !PYTHON=$VENV/bin/python \
  MODEL_PATH=/content/HunyuanOCR \
  INPUT_LIST=/content/hyocr/data/data_list.txt \
- PACK_OUTPUT=/content/hyocr/data/packed/train_${PACK_LEN}.jsonl \
+ PACK_OUTPUT=/content/hyocr/data/packed/train_$PACK_LEN.jsonl \
  PACK_LEN=$PACK_LEN \
  NUM_PROCESSES=2 THREADS_PER_PROCESS=4 \
  FOREGROUND=1 \
@@ -238,6 +238,11 @@ Ra 1.007 dòng train / 120 dòng validation, `thiếu ảnh` phải là 0.
 `NUM_PROCESSES=2` chứ không phải 32: Colab chỉ có 12 vCPU và mỗi process load
 một bản processor riêng. Bước này mất 10–20 phút vì phải mở từng ảnh để đếm
 vision token.
+
+> Viết `$PACK_LEN` **không có ngoặc nhọn**. Trong dòng `!` của IPython, `{...}`
+> là cú pháp nội suy biểu thức Python, nên `${PACK_LEN}` thành `$` + `16384`;
+> shell đọc `$1` là tham số vị trí (rỗng) và bạn nhận được
+> `train_6384.jsonl`.
 
 Kiểm tra:
 
@@ -265,7 +270,7 @@ subprocess.Popen(
 !PYTHON=$VENV/bin/python \
  TORCHRUN=$VENV/bin/torchrun \
  MODEL_PATH=/content/HunyuanOCR \
- TRAIN_DATA=/content/hyocr/data/packed/train_${PACK_LEN}.jsonl \
+ TRAIN_DATA=/content/hyocr/data/packed/train_$PACK_LEN.jsonl \
  PACK_LEN=$PACK_LEN \
  RUN_NAME=colab_run \
  SAVE_STEPS=25 \
