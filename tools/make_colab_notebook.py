@@ -52,34 +52,23 @@ import os; os.makedirs(DRIVE_DIR, exist_ok=True)"""),
 
     ("md", """`flash-attn` bắt buộc: `train/trainer.py:3` import `flash_attn_varlen_func`
 ngay đầu module và `train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"`.
-Build from source mất 40–60 phút, nên lấy wheel dựng sẵn khớp runtime."""),
-    ("code", """import subprocess, sys, torch, urllib.request
+Build from source mất 40–60 phút, nên lấy wheel dựng sẵn.
 
-tv  = ".".join(torch.__version__.split("+")[0].split(".")[:2])
-cu  = "cu" + torch.version.cuda.split(".")[0]
-abi = "TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE"
-py  = f"cp{sys.version_info.major}{sys.version_info.minor}"
-print(f"runtime: torch {tv} / {cu} / cxx11abi{abi} / {py}")
+Wheel được build riêng cho từng tổ hợp (CUDA major, torch minor, cxx11 ABI,
+Python, kiến trúc). Colab hay chạy torch mới hơn wheel mới nhất vài tuần, nên
+script dưới **liệt kê asset thật từ GitHub API rồi lọc**, không đoán tên file.
+Không khớp thì nó in ra lệnh hạ torch về bản gần nhất có wheel."""),
+    ("code", """!python tools/pick_flash_attn.py --install"""),
 
-BASE = "https://github.com/Dao-AILab/flash-attention/releases/download"
-def wheel_url(v):
-    return (f"{BASE}/v{v}/flash_attn-{v}+{cu}torch{tv}"
-            f"cxx11abi{abi}-{py}-{py}-linux_x86_64.whl")
+    ("md", """**Nếu cell trên báo "Không có wheel cho torch X":** copy hai lệnh nó in ra
+vào cell dưới rồi chạy. Cell tự giết kernel để Colab nạp lại torch mới — sau khi
+Colab báo "Runtime restarted", chạy lại từ cell `%cd` (bước 4) trở xuống, và
+**bỏ qua** cell hạ cấp này ở lần chạy thứ hai."""),
+    ("code", """# Dán 2 dòng pip mà pick_flash_attn.py in ra vào đây, ví dụ:
+# !pip install -q "torch==2.10.0" torchvision --index-url https://download.pytorch.org/whl/cu128
+# !pip install -q https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1%2Bcu12torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 
-whl = None
-for v in ("2.8.3", "2.8.2", "2.8.1", "2.8.0", "2.7.4.post1"):
-    u = wheel_url(v)
-    try:
-        urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=20)
-        whl = u
-        break
-    except Exception:
-        print("  không có:", u.rsplit("/", 1)[1])
-
-assert whl, ("Không có wheel khớp runtime này. Chọn tay ở "
-             "https://github.com/Dao-AILab/flash-attention/releases theo 4 mảnh in ra trên.")
-print("cài:", whl)
-subprocess.run(["pip", "install", "-q", whl], check=True)"""),
+import os; os.kill(os.getpid(), 9)   # ép Colab restart runtime"""),
     ("code", """from flash_attn.flash_attn_interface import flash_attn_varlen_func
 print("flash-attn OK")"""),
 

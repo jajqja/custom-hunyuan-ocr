@@ -69,40 +69,27 @@ làm ở bước 7: lưu vào `/content`, đồng bộ sang Drive bằng một v
 `train_hunyuan.py` truyền cứng `attn_implementation="flash_attention_2"`. Build
 from source trên Colab mất 40–60 phút mỗi session, nên phải lấy wheel dựng sẵn:
 
-```python
-import subprocess, sys, torch, urllib.request
-
-tv  = ".".join(torch.__version__.split("+")[0].split(".")[:2])
-cu  = "cu" + torch.version.cuda.split(".")[0]
-abi = "TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE"
-py  = f"cp{sys.version_info.major}{sys.version_info.minor}"
-print(f"runtime: torch {tv} / {cu} / cxx11abi{abi} / {py}")
-
-BASE = "https://github.com/Dao-AILab/flash-attention/releases/download"
-def wheel_url(v):
-    return (f"{BASE}/v{v}/flash_attn-{v}+{cu}torch{tv}"
-            f"cxx11abi{abi}-{py}-{py}-linux_x86_64.whl")
-
-whl = None
-for v in ("2.8.3", "2.8.2", "2.8.1", "2.8.0", "2.7.4.post1"):
-    u = wheel_url(v)
-    try:
-        urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=20)
-        whl = u
-        break
-    except Exception:
-        print("  không có:", u.rsplit("/", 1)[1])
-
-assert whl, "Không có wheel khớp runtime này — chọn tay ở releases page."
-print("cài:", whl)
-subprocess.run(["pip", "install", "-q", whl], check=True)
+```bash
+!python tools/pick_flash_attn.py --install
 ```
 
-Đoạn trên dò ngược vài bản flash-attn thay vì đóng cứng một version, vì mảnh
-`cu` lấy từ `torch.version.cuda` — runtime CUDA 13 sẽ tìm `cu13`, mà không phải
-bản flash-attn nào cũng phát hành wheel `cu13`. Không tìm được thì mở
-https://github.com/Dao-AILab/flash-attention/releases chọn tay file khớp
-`torch{tv}`, `{cu}`, `cxx11abi{abi}`, `{py}` in ra ở trên.
+Wheel flash-attn được build riêng cho từng tổ hợp **(CUDA major, torch minor,
+cxx11 ABI, phiên bản Python, kiến trúc)**. Đoán tên file rồi thử tải là cách
+hỏng thường xuyên — torch mới ra trước, wheel ra sau vài tuần. Script liệt kê
+asset thật từ GitHub Releases API rồi lọc.
+
+Runtime Colab tháng 8/2026 chạy **torch 2.11**, mà bản mới nhất có wheel là
+**torch 2.10**. Gặp trường hợp đó script in sẵn lệnh hạ cấp:
+
+```bash
+!pip install -q "torch==2.10.0" torchvision \
+     --index-url https://download.pytorch.org/whl/cu128
+!python tools/pick_flash_attn.py --install
+```
+
+rồi **phải restart runtime** (`import os; os.kill(os.getpid(), 9)`) và chạy lại
+từ bước 3. Torch 2.10 là bản duy nhất còn đường lùi ngoài việc build from source
+40–60 phút mỗi session.
 
 Lưu ý `nvidia-smi` báo "CUDA Version: 13.0" là **phiên bản driver hỗ trợ**, không
 phải CUDA mà torch được build. Mảnh dùng để chọn wheel là `torch.version.cuda`.
