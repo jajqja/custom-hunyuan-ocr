@@ -74,7 +74,7 @@ Hai lý do:
    kernel. Trong venv thì không đụng gì tới runtime.
 
 ```python
-import json, os, subprocess, sys
+import json, os, shutil, subprocess, sys
 
 VENV = "/content/venv"
 PY = f"{VENV}/bin/python"
@@ -88,19 +88,21 @@ def run(cmd, quiet=False):
     return r.returncode
 
 
-UV = False
-if run([sys.executable, "-m", "venv", VENV], quiet=True) != 0:
-    print("stdlib venv không dùng được -> chuyển sang uv")
-    assert run([sys.executable, "-m", "pip", "install", "-q", "uv"]) == 0
-    assert run([sys.executable, "-m", "uv", "venv", "--seed", VENV]) == 0
-    UV = True
-assert os.path.exists(PY), "không tạo được venv"
+# Dùng uv chứ không phải `python -m venv`: Debian tách ensurepip ra gói
+# python3-venv riêng mà ảnh Colab không cài, nên stdlib venv thoát mã 1 và để
+# lại một thư mục hỏng dở. uv tự mang pip, và cài nhanh hơn hẳn khi phải kéo
+# về ~6 GB torch.
+assert run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"]) == 0
+
+if not os.path.exists(PY):                    # chạy lại cell không cài lại từ đầu
+    shutil.rmtree(VENV, ignore_errors=True)   # dọn venv hỏng dở của lần trước
+    assert run([sys.executable, "-m", "uv", "venv", "--seed", "--clear", VENV]) == 0
+print("venv:", PY)
 
 
 def pipi(*args):
-    cmd = ([sys.executable, "-m", "uv", "pip", "install", "-q", "--python", PY, *args]
-           if UV else [PY, "-m", "pip", "install", "-q", *args])
-    assert run(cmd) == 0, f"cài thất bại: {args[0]}"
+    assert run([sys.executable, "-m", "uv", "pip", "install", "-q",
+                "--python", PY, *args]) == 0, f"cài thất bại: {args[0]}"
 
 
 plan = json.loads(subprocess.run(
@@ -108,8 +110,6 @@ plan = json.loads(subprocess.run(
     capture_output=True, text=True, check=True).stdout)
 print(json.dumps(plan, indent=2))
 
-if not UV:
-    pipi("-U", "pip", "setuptools", "wheel")
 pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
 pipi(plan["wheel"])
 pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
@@ -117,20 +117,23 @@ pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
      "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 ```
 
-**`python -m venv` trên Colab thường hỏng.** Debian/Ubuntu tách `ensurepip` ra
-gói `python3-venv` riêng, ảnh Colab không cài, nên stdlib venv thoát với mã 1.
-Cell trên bắt lỗi đó và chuyển sang `uv venv --seed` (uv tự mang pip nên không
-cần `ensurepip`), đồng thời cài gói bằng `uv pip` — nhanh hơn `pip` đáng kể khi
-phải kéo về ~6 GB torch.
+**Tại sao `uv` chứ không phải `python -m venv`.** Debian/Ubuntu tách `ensurepip`
+ra gói `python3-venv` riêng, ảnh Colab không cài, nên stdlib venv thoát mã 1 —
+và tệ hơn, nó **để lại một thư mục venv hỏng dở**, làm lần tạo kế tiếp báo
+"A virtual environment already exists". uv tự mang pip nên không đụng tới
+`ensurepip`, và `uv pip` kéo ~6 GB torch nhanh hơn `pip` đáng kể.
 
-Cách khác nếu muốn giữ stdlib venv:
+Cell chạy lại được nhiều lần: đã có `$VENV/bin/python` thì bỏ qua bước tạo,
+không cài lại từ đầu; chưa có thì xoá sạch thư mục cũ rồi tạo với `--clear`.
+
+Muốn giữ stdlib venv thì cài gói còn thiếu trước:
 
 ```bash
 !apt-get install -qq -y python3.12-venv
 ```
 
-Mọi lệnh cài đều **in stdout/stderr khi lỗi** thay vì chỉ ném
-`CalledProcessError` không kèm thông tin gì.
+Mọi lệnh cài **in stdout/stderr khi lỗi** thay vì chỉ ném `CalledProcessError`
+không kèm thông tin gì.
 
 `--plan` hỏi GitHub Releases API xem bản torch mới nhất nào **còn wheel**, rồi
 trả về JSON:

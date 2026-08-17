@@ -67,10 +67,12 @@ Dựng venv sạch thay vì cài đè lên Python của Colab, vì hai lý do:
 `--plan` hỏi GitHub Releases API xem bản torch mới nhất nào còn wheel, rồi cài
 đúng bộ đó vào venv. Không đoán tên file, nên không mục theo thời gian.
 
-Nếu `python -m venv` hỏng (Colab hay thiếu `ensurepip` vì Debian tách nó ra gói
-`python3-venv`), cell tự chuyển sang `uv venv --seed`. Mọi lệnh cài đều in
-stdout/stderr khi lỗi thay vì chỉ ném `CalledProcessError`."""),
-    ("code", """import json, os, subprocess, sys
+Venv được tạo bằng `uv` chứ không phải `python -m venv`: ảnh Colab thiếu
+`ensurepip` (Debian tách ra gói `python3-venv`) nên stdlib venv thoát mã 1.
+Cell chạy lại được nhiều lần — có venv rồi thì bỏ qua bước tạo, không cài lại
+6 GB. Mọi lệnh cài in stdout/stderr khi lỗi thay vì chỉ ném
+`CalledProcessError` rỗng."""),
+    ("code", """import json, os, shutil, subprocess, sys
 
 VENV = "/content/venv"
 PY = f"{VENV}/bin/python"
@@ -84,22 +86,21 @@ def run(cmd, quiet=False):
     return r.returncode
 
 
-# Tạo venv. `python -m venv` trên Colab hay hỏng vì Debian tách ensurepip ra gói
-# python3-venv riêng; uv tự mang pip nên không phụ thuộc vào đó.
-UV = False
-if run([sys.executable, "-m", "venv", VENV], quiet=True) != 0:
-    print("stdlib venv không dùng được (thường thiếu ensurepip) -> chuyển sang uv")
-    assert run([sys.executable, "-m", "pip", "install", "-q", "uv"]) == 0
-    assert run([sys.executable, "-m", "uv", "venv", "--seed", VENV]) == 0
-    UV = True
-assert os.path.exists(PY), "không tạo được venv"
-print("venv:", PY, "| uv:", UV)
+# Dùng uv chứ không phải `python -m venv`: Debian tách ensurepip ra gói
+# python3-venv riêng mà ảnh Colab không cài, nên stdlib venv thoát mã 1 và để
+# lại một thư mục hỏng dở. uv tự mang pip, và cài nhanh hơn hẳn khi phải kéo
+# về ~6 GB torch.
+assert run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"]) == 0
+
+if not os.path.exists(PY):                    # chạy lại cell không cài lại từ đầu
+    shutil.rmtree(VENV, ignore_errors=True)   # dọn venv hỏng dở của lần trước
+    assert run([sys.executable, "-m", "uv", "venv", "--seed", "--clear", VENV]) == 0
+print("venv:", PY)
 
 
 def pipi(*args):
-    cmd = ([sys.executable, "-m", "uv", "pip", "install", "-q", "--python", PY, *args]
-           if UV else [PY, "-m", "pip", "install", "-q", *args])
-    assert run(cmd) == 0, f"cài thất bại: {args[0]}"
+    assert run([sys.executable, "-m", "uv", "pip", "install", "-q",
+                "--python", PY, *args]) == 0, f"cài thất bại: {args[0]}"
 
 
 plan = json.loads(subprocess.run(
@@ -107,8 +108,6 @@ plan = json.loads(subprocess.run(
     capture_output=True, text=True, check=True).stdout)
 print(json.dumps(plan, indent=2))
 
-if not UV:
-    pipi("-U", "pip", "setuptools", "wheel")
 pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
 pipi(plan["wheel"])
 pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
