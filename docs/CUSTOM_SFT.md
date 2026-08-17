@@ -197,10 +197,33 @@ Muốn `--load_best_model_at_end` thì `SAVE_STEPS` phải là bội của `EVAL
 (đặt cả hai bằng 32); script không bật sẵn.
 
 `eval_loss` chỉ là proxy — nó đo teacher-forced next-token, không đo được
-model tự sinh ra Markdown đúng cấu trúc hay không. CER/WER thật phải chạy sinh
-văn bản trên `data/flat/validation.jsonl` bằng code trong `inference/` sau khi
-train xong, và **chấm riêng 3 mẫu nhãn rỗng bằng exact-match** vì CER không định
+model tự sinh ra Markdown đúng cấu trúc hay không.
+
+### Chấm thật bằng generation
+
+```bash
+python tools/eval_checkpoint.py \
+    --model ./output/colab_run/checkpoint-300 \
+    --processor ./HunyuanOCR \
+    --data ./data/flat/validation.jsonl \
+    --out ./output/eval_ckpt300.jsonl
+```
+
+`--processor` **bắt buộc** khi chấm một `checkpoint-*`: Trainer chỉ lưu tokenizer
+vào checkpoint, image processor chỉ được ghi vào thư mục gốc sau khi train xong
+(`train_hunyuan.py` gọi `processor.save_pretrained` đúng một lần ở cuối). Thiếu
+nó thì `AutoProcessor.from_pretrained` sẽ lỗi hoặc lấy nhầm cấu hình ảnh.
+
+Sinh theo đúng công thức của `inference/transformers/infer_hf_8gpu.py` (greedy,
+`repetition_penalty=1.08`) để số đo so được với baseline. In CER/WER tách theo
+từng config, và **chấm riêng nhãn rỗng bằng exact-match** vì CER không định
 nghĩa được khi reference rỗng.
+
+`--limit 20` để thử nhanh trước khi chạy đủ 120 mẫu. Cài `rapidfuzz` cho phần
+tính khoảng cách nhanh hơn ~100 lần; thiếu thì tự động dùng bản Python thuần.
+
+Muốn so nhiều checkpoint thì chạy lại với `--model` khác nhau — mỗi lần cỡ
+5–10 phút cho 120 mẫu.
 
 ## 5. Những chỗ đã sửa của upstream
 
