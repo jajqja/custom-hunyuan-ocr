@@ -209,8 +209,8 @@ notebook_login()          # token cần quyền read; dataset đang private
 # model gốc (~2 GB), bỏ nhánh v1.0
 !$VENV/bin/hf download tencent/HunyuanOCR --local-dir /content/HunyuanOCR --exclude "v1.0/*"
 
-# dataset (~600 MB) — đổi <user>/<repo> cho đúng repo bạn đã đẩy
-!$VENV/bin/hf download <user>/vietnamese-doc-ocr --repo-type dataset \
+# dataset (~600 MB), private — token phải có quyền read trên org newai-vn
+!$VENV/bin/hf download newai-vn/vietnamese-doc-ocr --repo-type dataset \
              --local-dir /content/dataset
 ```
 
@@ -354,7 +354,7 @@ packed chỉ vài MB, đáng để giữ.
 ## 9. Lấy model ra
 
 ```bash
-!$VENV/bin/hf upload <user>/hunyuanocr-vi-sft /content/hyocr/output/colab_run . \
+!$VENV/bin/hf upload newai-vn/newai-ocr-v2 /content/hyocr/output/colab_run . \
            --repo-type model --private
 ```
 

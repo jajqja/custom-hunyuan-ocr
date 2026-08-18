@@ -27,9 +27,13 @@ print(f"{GB:.0f} GB -> PACK_LEN={PACK_LEN}")
 # Colab cấp A100 cả bản 40GB lẫn 80GB tuỳ lần, nên đừng đặt cứng. Trên 80GB có
 # thể thử 20480 sau khi xem headroom ở lần chạy đầu."""),
 
-    ("md", "## 2. Cấu hình — **sửa hai dòng dưới**"),
-    ("code", """DATASET_REPO = "<user>/vietnamese-doc-ocr"   # repo dataset đã đẩy lên HF
-OUTPUT_REPO  = "<user>/hunyuanocr-vi-sft"    # nơi đẩy model sau khi train
+    ("md", """## 2. Cấu hình
+
+Cả hai repo đều **private** — dữ liệu có CCCD, họ tên, ngày sinh, địa chỉ
+thường trú và ảnh thẻ có chân dung, vân tay. Token phải có quyền read (và
+write nếu đẩy model) trên org `newai-vn`. Đừng chuyển repo nào sang public."""),
+    ("code", """DATASET_REPO = "newai-vn/vietnamese-doc-ocr"
+OUTPUT_REPO  = "newai-vn/newai-ocr-v2"       # nơi đẩy model sau khi train
 
 REPO_URL = "https://github.com/jajqja/custom-hunyuan-ocr.git"
 MODEL_DIR, DATA_DIR, WORK = "/content/HunyuanOCR", "/content/dataset", "/content/hyocr"
