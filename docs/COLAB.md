@@ -255,13 +255,19 @@ for sp in ("train", "validation"):
 
 Sao lưu sang Drive luôn — chỉ vài MB, và mất session thì không phải convert lại.
 
-> Thấy `[ERROR] /bin/python` nghĩa là `$VENV` rỗng — biến Python đó không còn
-> trong namespace của kernel (thường vì kernel đã restart, hoặc bạn chưa chạy
-> cell **Cấu hình**). IPython không thay thế được thì shell nhận biến rỗng và
-> ghép ra `/bin/python`.
+> **Notebook dùng `{VENV}` chứ không phải `$VENV`.** Cả hai đều là nội suy của
+> IPython và cùng tác dụng, nhưng hai dấu `$` trên một dòng bị trình render
+> notebook hiểu là công thức LaTeX: `!git clone -q $REPO_URL $WORK` hiện lên
+> thành `!git clone -q ` + *REPO_URL* nghiêng + `WORK`. Chạy vẫn đúng, chỉ là
+> không đọc được. `{...}` không có vấn đề đó.
 >
-> Viết `$PACK_LEN` **không có ngoặc nhọn**. Trong dòng `!` của IPython, `{...}`
-> là cú pháp nội suy biểu thức Python, nên `${PACK_LEN}` thành `$` + `16384`.
+> Kèm theo: trong dòng `!`, mọi ngoặc nhọn đều là nội suy. Cần ngoặc nhọn thật
+> (JSON trong tham số chẳng hạn) thì nhân đôi thành `{{` `}}`.
+>
+> Thấy `[ERROR] /bin/python` nghĩa là `{VENV}` rỗng — biến Python đó không còn
+> trong namespace của kernel (thường vì kernel đã restart, hoặc bạn chưa chạy
+> cell **Cấu hình**). Chạy lại cell Cấu hình, hoặc gõ thẳng
+> `/content/venv/bin/python`.
 
 ## 7. Train
 

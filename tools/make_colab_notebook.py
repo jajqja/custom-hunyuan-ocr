@@ -50,8 +50,8 @@ drive.mount('/content/drive')
 import os; os.makedirs(DRIVE_DIR, exist_ok=True)"""),
 
     ("md", "## 4. Clone fork"),
-    ("code", """!git clone -q $REPO_URL $WORK
-%cd $WORK
+    ("code", """!git clone -q {REPO_URL} {WORK}
+%cd {WORK}
 !git log --oneline -1"""),
 
     ("md", """## 5. Tạo venv và cài dependency
@@ -123,10 +123,10 @@ pipi("transformers>=5.13", "accelerate", "deepspeed", "safetensors", "datasets",
 print("venv xong")"""),
 
     ("md", """Từ đây mọi lệnh gọi script đều truyền thẳng interpreter của venv
-(`PYTHON=$VENV/bin/python`, `TORCHRUN=$VENV/bin/torchrun`) thay vì dựa vào
+(`PYTHON={VENV}/bin/python`, `TORCHRUN={VENV}/bin/torchrun`) thay vì dựa vào
 `PATH`. Cả hai script cũng tự kiểm tra interpreter trước khi chạy và báo lỗi
 rõ ràng nếu thiếu gói, thay vì để traceback rơi ra giữa chừng."""),
-    ("code", """!$VENV/bin/python -c "import torch, flash_attn; \\
+    ("code", """!{VENV}/bin/python -c "import torch, flash_attn; \\
 print('torch', torch.__version__, '| cuda', torch.version.cuda, \\
       '| flash_attn', flash_attn.__version__, '| gpu', torch.cuda.get_device_name(0))\""""),
 
@@ -137,9 +137,9 @@ print('torch', torch.__version__, '| cuda', torch.version.cuda, \\
     ("code", """!pip install -q -U "huggingface_hub>=0.34"
 from huggingface_hub import notebook_login
 notebook_login()   # token quyền read; dataset đang private"""),
-    ("code", """!$VENV/bin/hf download tencent/HunyuanOCR --local-dir $MODEL_DIR --exclude "v1.0/*"
-!$VENV/bin/hf download $DATASET_REPO --repo-type dataset --local-dir $DATA_DIR
-!ls $DATA_DIR"""),
+    ("code", """!{VENV}/bin/hf download tencent/HunyuanOCR --local-dir {MODEL_DIR} --exclude "v1.0/*"
+!{VENV}/bin/hf download {DATASET_REPO} --repo-type dataset --local-dir {DATA_DIR}
+!ls {DATA_DIR}"""),
 
     ("md", """Prompt lấy từ `configs/ocr_prompt.md` **của repo này**, không trích
 từ README dataset. Prompt là cấu hình của lần train nên phải được version cùng
@@ -152,10 +152,10 @@ chuỗi prompt trong suốt quá trình train."""),
 `--flat` xuất `{"image","question","answer"}` — schema mà `VLDataset` đọc trực
 tiếp khi `is_packed=False`. Không có bước pack: packing chỉ chạy được trên bản
 transformers prerelease đã ngừng dùng, và với 1.015 mẫu thì nó không đáng."""),
-    ("code", """!$VENV/bin/python tools/makedata_to_hyocr.py \\
-    --root $DATA_DIR \\
-    --prompt-file $WORK/configs/ocr_prompt.md \\
-    --out-dir $WORK/data/flat --flat
+    ("code", """!{VENV}/bin/python tools/makedata_to_hyocr.py \\
+    --root {DATA_DIR} \\
+    --prompt-file {WORK}/configs/ocr_prompt.md \\
+    --out-dir {WORK}/data/flat --flat
 # cột "thiếu ảnh" phải là 0"""),
     ("code", """import json
 
@@ -164,7 +164,7 @@ for sp in ("train", "validation"):
     print(f"{sp:11} {len(rows):5} mẫu | nhãn rỗng "
           f"{sum(not r['answer'].strip() for r in rows)}")
 
-!mkdir -p $DRIVE_DIR/flat && cp $WORK/data/flat/*.jsonl $DRIVE_DIR/flat/"""),
+!mkdir -p {DRIVE_DIR}/flat && cp {WORK}/data/flat/*.jsonl {DRIVE_DIR}/flat/"""),
 
     ("md", """## 8. Train
 
@@ -174,24 +174,24 @@ cả train và eval. Muốn eval loss thì thêm
 chọn checkpoint nào là CER sinh thật, đo sau bằng `eval_checkpoint.py`."""),
     ("code", """import subprocess
 # Đồng bộ output sang Drive mỗi 10 phút để session chết không mất checkpoint.
-# Đích là $DRIVE_DIR/output/, KHÔNG phải $DRIVE_DIR: `--delete` xoá mọi thứ ở
-# đích mà nguồn không có, nên trỏ vào thư mục gốc sẽ xoá luôn $DRIVE_DIR/flat/
+# Đích là DRIVE_DIR/output/, KHÔNG phải DRIVE_DIR: `--delete` xoá mọi thứ ở
+# đích mà nguồn không có, nên trỏ vào thư mục gốc sẽ xoá luôn DRIVE_DIR/flat/
 # vừa sao lưu ở bước 7.
 subprocess.Popen(f"mkdir -p {DRIVE_DIR}/output; "
                  f"while true; do rsync -a --delete {WORK}/output/ "
                  f"{DRIVE_DIR}/output/; sleep 600; done", shell=True)
 print("rsync nền đã chạy ->", f"{DRIVE_DIR}/output/")"""),
-    # Đường dẫn viết thẳng: line magic không nội suy $WORK như dòng `!`.
+    # Đường dẫn viết thẳng: line magic không nội suy biến như dòng `!`.
     ("code", """%load_ext tensorboard
 %tensorboard --logdir /content/hyocr/output"""),
-    ("code", """!PYTHON=$VENV/bin/python \\
- TORCHRUN=$VENV/bin/torchrun \\
- MODEL_PATH=$MODEL_DIR \\
- TRAIN_DATA=$WORK/data/flat/train.jsonl \\
+    ("code", """!PYTHON={VENV}/bin/python \\
+ TORCHRUN={VENV}/bin/torchrun \\
+ MODEL_PATH={MODEL_DIR} \\
+ TRAIN_DATA={WORK}/data/flat/train.jsonl \\
  PACKING=0 \\
  GRAD_ACCUM=16 \\
- PACK_LEN=$PACK_LEN \\
- RUN_NAME=$RUN_NAME \\
+ PACK_LEN={PACK_LEN} \\
+ RUN_NAME={RUN_NAME} \\
  SAVE_STEPS=25 \\
      bash scripts/sft_base_1gpu.sh"""),
 
@@ -212,13 +212,13 @@ Làm lại cell 1–8 (kể cả dựng venv — `/content` đã bị xoá sạc
 checkpoint từ Drive về **trước** khi chạy lại cell train với đúng `RUN_NAME` cũ.
 `train_hunyuan.py:221` tự `resume_from_checkpoint=True` khi thấy `checkpoint-*`
 trong output dir."""),
-    ("code", """!mkdir -p $WORK/output $WORK/data/flat
-!rsync -a $DRIVE_DIR/output/ $WORK/output/
-!rsync -a $DRIVE_DIR/flat/ $WORK/data/flat/
-!ls $WORK/output/$RUN_NAME && ls $WORK/data/flat"""),
+    ("code", """!mkdir -p {WORK}/output {WORK}/data/flat
+!rsync -a {DRIVE_DIR}/output/ {WORK}/output/
+!rsync -a {DRIVE_DIR}/flat/ {WORK}/data/flat/
+!ls {WORK}/output/{RUN_NAME} && ls {WORK}/data/flat"""),
 
     ("md", "## 10. Đẩy model đã train lên HF"),
-    ("code", """!$VENV/bin/hf upload $OUTPUT_REPO $WORK/output/$RUN_NAME . \\
+    ("code", """!{VENV}/bin/hf upload {OUTPUT_REPO} {WORK}/output/{RUN_NAME} . \\
     --repo-type model --private"""),
 ]
 
