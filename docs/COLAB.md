@@ -4,6 +4,9 @@ Bản Colab của [`CUSTOM_SFT.md`](./CUSTOM_SFT.md). Notebook tương ứng:
 [`notebooks/hyocr_sft_colab.ipynb`](../notebooks/hyocr_sft_colab.ipynb) — tải lên
 Colab rồi chạy từ trên xuống.
 
+Doc này chỉ tới hết bước train. Serve model đã train bằng vLLM — trên Colab hay
+trên máy riêng — ở [`DEPLOY_VLLM.md`](./DEPLOY_VLLM.md).
+
 > **Runtime "A100" của Colab có thể là bản 40GB hoặc 80GB, không đoán trước
 > được.** Đừng đặt cứng `PACK_LEN` — bước 1 đo VRAM rồi chọn. Cùng một tài khoản
 > lần này ra A100-SXM4-80GB thì lần sau vẫn có thể ra 40GB.

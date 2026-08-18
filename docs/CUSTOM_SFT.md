@@ -4,7 +4,8 @@ Runbook cho fork này. Nguồn dữ liệu: `makedata/hf_upload` (1.015 train / 
 validation, 4 config: GCN, Documents, Others, Handwriting).
 
 Chạy trên Google Colab thì xem [`COLAB.md`](./COLAB.md) — cùng quy trình nhưng
-đã tính tới A100-40GB, flash-attn wheel, và chuyện mất session.
+đã tính tới A100-40GB, flash-attn wheel, và chuyện mất session. Serve model đã
+train thì xem [`DEPLOY_VLLM.md`](./DEPLOY_VLLM.md).
 
 Tất cả script upstream vẫn giữ nguyên hành vi cũ; phần riêng của fork là
 `scripts/env_single.sh`, `scripts/sft_base_1gpu.sh`, `tools/makedata_to_hyocr.py`
@@ -263,6 +264,9 @@ Muốn so nhiều checkpoint thì chạy lại với `--model` khác nhau — m�
 
 ### Serve bằng vLLM: phải vá `get_rope`
 
+> Runbook đầy đủ cho việc deploy — Colab, máy riêng, systemd, Docker, bảng sự cố
+> — ở [`DEPLOY_VLLM.md`](./DEPLOY_VLLM.md). Mục này chỉ ghi *vì sao* phải vá.
+
 Config gốc HunyuanOCR khai báo `{"type": "xdrope", "xdrope_section": [...]}`.
 transformers 5.x chuẩn hoá nó khi load thành
 `{"rope_type": "dynamic", "mrope_section": [...]}`, và vLLM đọc **bản đã chuẩn
@@ -297,7 +301,7 @@ python tools/patch_vllm_xdrope.py --python /content/vllmenv/bin/python
 của config — `PretrainedConfig` giữ nguyên khoá lạ thành thuộc tính, nên
 `getattr(config, "xdrope_section")` bắt được và `uses_xdrope_dim` trả 4.
 
-`patch_vllm_xdrope.py` vá hai chỗ trong vLLM:
+`patch_vllm_xdrope.py` vá ba chỗ trong vLLM:
 
 | File | Sửa |
 |---|---|
@@ -315,13 +319,18 @@ Idempotent, sao lưu `.hyocr.bak`, gỡ bằng `--revert`, và **kiểm tra file
 vá có parse được không trước khi ghi** — thụt lề sai vẫn ghi được nhưng chỉ vỡ
 lúc import. Lúc deploy thì thêm cả hai dòng vào Dockerfile sau `pip install vllm`.
 
-Các mảnh khác của môi trường serve:
+Cấu hình serve đã chạy được — ghim cứng cả hai:
 
 | Thứ | Ràng buộc |
 |---|---|
-| vLLM | **≥ 0.26**. Bản 0.25.1 gọi `AutoImageProcessor.register("<chuỗi>", cls)`, transformers 5.15 đòi class → `AttributeError: 'str' object has no attribute '__module__'` |
-| flashinfer | `flashinfer-cubin` mới nhất (0.6.13) không khớp `flashinfer-python` (0.6.16+) và không có bản khớp. Đặt `FLASHINFER_DISABLE_VERSION_CHECK=1`; vô hại vì attention backend là FLASH_ATTN và ta sinh greedy |
+| vLLM | `0.25.1` |
+| transformers | `5.12.1`. Bản ≥ 5.13 làm vLLM 0.25.1 vỡ ở `AutoImageProcessor.register("<chuỗi>", cls)` → `AttributeError: 'str' object has no attribute '__module__'` (5.12 chưa có dòng `key.__module__`) |
 | model dir | phải qua `export_checkpoint.py` — `checkpoint-*` thiếu image processor |
+| venv | **tách khỏi venv train**: venv train ghim torch theo wheel flash-attn, vLLM kéo torch riêng |
+
+Hạ transformers xuống dưới 5.13 **không** tránh được normalization rope: 5.12 cũng
+đã có `RotaryEmbeddingConfigMixin`. Ghim 5.12.1 là để tránh lỗi
+`AutoImageProcessor` ở trên, không phải để cứu rope — rope vẫn cần cả ba bản vá.
 
 ### Packing không dùng được trên transformers phát hành
 
