@@ -110,8 +110,13 @@ print(json.dumps(plan, indent=2))
 
 pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
 pipi(plan["wheel"])
-pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
-     "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
+# Bản prerelease Tencent phát triển trên đó (4.57.1.dev0). Ghim để giữ được
+# packing, xdrope và bố cục module gốc. Cài TRƯỚC các gói khác: 4.57 chốt
+# tokenizers<0.23, để resolver tự chọn thay vì ghim tay.
+pipi("git+https://github.com/huggingface/transformers"
+     "@82a06db03535c49aa987719ed0746a76093b1ec4")
+pipi("accelerate", "deepspeed", "safetensors", "datasets",
+     "sentencepiece", "pillow", "opencv-python-headless", "numpy",
      "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 print("venv xong")"""),
 
@@ -134,19 +139,16 @@ notebook_login()   # token quyền read; dataset đang private"""),
 !$VENV/bin/hf download $DATASET_REPO --repo-type dataset --local-dir $DATA_DIR
 !ls $DATA_DIR"""),
 
-    ("md", """Prompt không nằm thành file riêng trong repo dataset — nó ở trong
-`README.md`, trong khối ```` ```text ````."""),
-    ("code", r"""import re, pathlib
-
-readme = pathlib.Path(f"{DATA_DIR}/README.md").read_text(encoding="utf-8")
-prompt = re.search(r"````text\n(.*?)\n````", readme, re.S).group(1).strip()
-pathlib.Path("/content/ocr_prompt.md").write_text(prompt, encoding="utf-8")
-print(prompt)"""),
+    ("md", """Prompt lấy từ `configs/ocr_prompt.md` **của repo này**, không trích
+từ README dataset. Prompt là cấu hình của lần train nên phải được version cùng
+code, và phải khớp từng chữ với prompt lúc suy luận — model chỉ thấy đúng một
+chuỗi prompt trong suốt quá trình train."""),
+    ("code", """print(open(f"{WORK}/configs/ocr_prompt.md", encoding="utf-8").read())"""),
 
     ("md", "## 7. Convert sang raw JSONL"),
     ("code", """!$VENV/bin/python tools/makedata_to_hyocr.py \\
     --root $DATA_DIR \\
-    --prompt-file /content/ocr_prompt.md \\
+    --prompt-file $WORK/configs/ocr_prompt.md \\
     --out-dir $WORK/data/raw \\
     --data-list $WORK/data/data_list.txt
 # cột "thiếu ảnh" phải là 0"""),
@@ -184,6 +186,8 @@ print("rsync nền đã chạy")"""),
  TORCHRUN=$VENV/bin/torchrun \\
  MODEL_PATH=$MODEL_DIR \\
  TRAIN_DATA=$WORK/data/packed/train_$PACK_LEN.jsonl \\
+ PACKING=1 \\
+ GRAD_ACCUM=4 \\
  PACK_LEN=$PACK_LEN \\
  RUN_NAME=$RUN_NAME \\
  SAVE_STEPS=25 \\

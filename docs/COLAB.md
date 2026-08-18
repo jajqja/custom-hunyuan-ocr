@@ -112,10 +112,31 @@ print(json.dumps(plan, indent=2))
 
 pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
 pipi(plan["wheel"])
-pipi("transformers>=4.57", "accelerate", "deepspeed", "safetensors", "datasets",
-     "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
+# Bản prerelease mà Tencent phát triển trên đó (4.57.1.dev0). Ghim để giữ được
+# packing, xdrope và bố cục module gốc — xem CUSTOM_SFT.md mục "Đường ghim".
+# Cài transformers TRƯỚC: 4.57 chốt tokenizers<0.23, để resolver tự chọn.
+pipi("git+https://github.com/huggingface/transformers"
+     "@82a06db03535c49aa987719ed0746a76093b1ec4")
+pipi("accelerate", "deepspeed", "safetensors", "datasets",
+     "sentencepiece", "pillow", "opencv-python-headless", "numpy",
      "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 ```
+
+Kiểm ngay sau khi cài — ba thứ này quyết định `PACKING=1` chạy được hay không:
+
+```python
+!$PY -c "
+import dataclasses, transformers as T
+from transformers.models.hunyuan_vl.modeling_hunyuan_vl import apply_rotary_pos_emb_xdrope
+from transformers import TrainingArguments as A
+f = {x.name for x in dataclasses.fields(A)}
+print('transformers', T.__version__, '| xdrope OK')
+print('warmup_ratio', 'warmup_ratio' in f, '| logging_dir', 'logging_dir' in f)"
+```
+
+Phải ra `transformers 4.57.1.dev0 | xdrope OK` và cả hai flag `True`.
+`ImportError` ở dòng import nghĩa là pin không ăn — kiểm lại xem venv có sẵn bản
+transformers khác không.
 
 **Tại sao `uv` chứ không phải `python -m venv`.** Debian/Ubuntu tách `ensurepip`
 ra gói `python3-venv` riêng, ảnh Colab không cài, nên stdlib venv thoát mã 1 —
@@ -201,15 +222,13 @@ Cây `--local-dir` khớp y hệt `hf_upload/` nên converter dùng thẳng đư
 ...
 ```
 
-Prompt: repo dataset **không** chứa `ocr_prompt.md`, nó nằm trong `README.md`
-dưới khối ```` ```text ````. Trích ra:
+Prompt: dùng `configs/ocr_prompt.md` **trong repo này**, không trích từ README
+dataset. Prompt là một phần cấu hình của lần train — nó phải được version cùng
+code, và phải khớp từng chữ với prompt lúc suy luận (model chỉ thấy đúng một
+chuỗi prompt suốt quá trình train).
 
-```python
-import re, pathlib
-readme = pathlib.Path("/content/dataset/README.md").read_text(encoding="utf-8")
-prompt = re.search(r"````text\n(.*?)\n````", readme, re.S).group(1).strip()
-pathlib.Path("/content/ocr_prompt.md").write_text(prompt, encoding="utf-8")
-print(prompt[:120], "...")
+```bash
+!head -3 /content/hyocr/configs/ocr_prompt.md
 ```
 
 ## 6. Convert + pack
@@ -217,12 +236,12 @@ print(prompt[:120], "...")
 ```bash
 !$VENV/bin/python tools/makedata_to_hyocr.py \
     --root /content/dataset \
-    --prompt-file /content/ocr_prompt.md \
+    --prompt-file /content/hyocr/configs/ocr_prompt.md \
     --out-dir /content/hyocr/data/raw \
     --data-list /content/hyocr/data/data_list.txt
 ```
 
-Ra 1.007 dòng train / 120 dòng validation, `thiếu ảnh` phải là 0.
+Ra 1.013 dòng train / 114 dòng validation, `thiếu ảnh` phải là 0.
 
 ```bash
 !PYTHON=$VENV/bin/python \
@@ -262,22 +281,34 @@ print(f"{n} pack, trung bình {t/n:.0f} token/pack")
 
 ## 7. Train
 
-Cấu hình đã chạy thật trên A100-80GB (transformers 5.15, torch 2.10):
+Trên transformers ghim `@82a06db` thì **bật packing** — đó là lý do ghim:
 
 ```bash
 !PYTHON=/content/venv/bin/python \
  TORCHRUN=/content/venv/bin/torchrun \
  MODEL_PATH=/content/HunyuanOCR \
- TRAIN_DATA=/content/hyocr/data/flat/train.jsonl \
- PACKING=0 \
- GRAD_ACCUM=16 \
- PACK_LEN=16384 \
+ TRAIN_DATA=/content/hyocr/data/packed/train_$PACK_LEN.jsonl \
+ PACKING=1 \
+ GRAD_ACCUM=4 \
+ PACK_LEN=$PACK_LEN \
  RUN_NAME=colab_run \
  SAVE_STEPS=25 \
      bash scripts/sft_base_1gpu.sh
 ```
 
-315 step (1.007 mẫu / 16 accum × 5 epoch). Chạy đồng bộ Drive ở nền trước đó:
+`GRAD_ACCUM=4` chứ không phải 16: một pack 16384 token chứa cỡ 4 trang, nên
+4 accum × ~4 trang ≈ batch hiệu dụng 16 trang, xấp xỉ cấu hình không pack.
+
+Số step phụ thuộc số pack — đọc từ bước kiểm tra ở mục 6:
+`ceil(n_pack / 4) × EPOCHS`. Với ~250 pack và 5 epoch là khoảng 315 step.
+
+Bản không pack (transformers phát hành ≥ 5.13) vẫn chạy được, chỉ chậm hơn:
+
+```bash
+ TRAIN_DATA=/content/hyocr/data/flat/train.jsonl  PACKING=0  GRAD_ACCUM=16
+```
+
+Chạy đồng bộ Drive ở nền trước đó:
 
 ```python
 import subprocess

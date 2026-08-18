@@ -331,6 +331,37 @@ tiếp khi `is_packed=False`. `GRAD_ACCUM=16` để batch hiệu dụng xấp x�
 Với 1.007 mẫu thì phần lãng phí do padding không đáng kể — packing là tối ưu
 throughput cho vòng train cỡ triệu mẫu.
 
+### Đường ghim: `transformers@82a06db` (khuyến nghị để train)
+
+Bản prerelease mà Tencent phát triển trên đó — `82a06db03535c49aa987719ed0746a76093b1ec4`,
+"hunyuan vision prerelease", 20/11/2025, version `4.57.1.dev0`:
+
+| | bản phát hành ≥ 5.13 | `@82a06db` |
+|---|---|---|
+| `apply_rotary_pos_emb_xdrope` | không export | **có** (`modeling_hunyuan_vl.py:457`) |
+| bố cục module | `model.model.vision_tower` | `model.vit` |
+| processor trả `position_ids` | không | **có** |
+| `rope_scaling` khi load | đổi tên thành `rope_parameters` / `mrope_section` | **giữ nguyên** `type: xdrope` |
+| `TrainingArguments.warmup_ratio` | bỏ | có |
+| packing | không dùng được | **dùng được** |
+
+Ghim bản này thì monkeypatch attention của upstream áp dụng lại được, nên
+`PACKING=1` chạy đúng và không cần bản vá nào trong `train/`. Các sửa đổi ở
+`train/trainer.py` và `train/train_hunyuan.py` đều tương thích hai chiều — chúng
+chỉ *thêm* đường lùi cho bản mới, không đổi hành vi trên bản ghim.
+
+```bash
+uv pip install "git+https://github.com/huggingface/transformers@82a06db03535c49aa987719ed0746a76093b1ec4"
+```
+
+`transformers 4.57` chốt `tokenizers<0.23`, nên cài transformers **trước** rồi để
+resolver tự chọn `tokenizers`; đừng ghim tay bản mới hơn.
+
+Prompt dùng cho lần train nào thì lưu kèm lần đó — `configs/ocr_prompt.md` là bản
+đang dùng. Nó phải **khớp từng chữ** với prompt lúc suy luận: model chỉ thấy đúng
+một chuỗi prompt trong suốt quá trình train, nên đổi câu chữ lúc serve là lệch
+phân phối chứ không phải "prompt engineering".
+
 ### Bố cục module đổi tên
 
 | pre-merge (code gốc) | transformers ≥ 5.13 |
