@@ -248,7 +248,12 @@ import json
 for sp in ("train", "validation"):
     rows = [json.loads(l) for l in open(f"/content/hyocr/data/flat/{sp}.jsonl")]
     print(f"{sp:11} {len(rows):5} mẫu | nhãn rỗng {sum(not r['answer'].strip() for r in rows)}")
+
+!mkdir -p /content/drive/MyDrive/hyocr_sft/flat \
+    && cp /content/hyocr/data/flat/*.jsonl /content/drive/MyDrive/hyocr_sft/flat/
 ```
+
+Sao lưu sang Drive luôn — chỉ vài MB, và mất session thì không phải convert lại.
 
 > Thấy `[ERROR] /bin/python` nghĩa là `$VENV` rỗng — biến Python đó không còn
 > trong namespace của kernel (thường vì kernel đã restart, hoặc bạn chưa chạy
@@ -288,10 +293,15 @@ Chạy đồng bộ Drive ở nền trước đó:
 ```python
 import subprocess
 subprocess.Popen(
+    "mkdir -p /content/drive/MyDrive/hyocr_sft/output; "
     "while true; do rsync -a --delete /content/hyocr/output/ "
-    "/content/drive/MyDrive/hyocr_sft/; sleep 600; done",
+    "/content/drive/MyDrive/hyocr_sft/output/; sleep 600; done",
     shell=True)
 ```
+
+> Đích phải là `hyocr_sft/output/`, **không** phải `hyocr_sft/`. `--delete` xoá
+> mọi thứ ở đích mà nguồn không có, nên trỏ vào thư mục gốc sẽ xoá luôn
+> `hyocr_sft/flat/` — bản sao lưu JSONL của bước 6.
 
 `TRAIN_DATA` là JSONL `--flat`, **không** phải file packed — xem
 [`CUSTOM_SFT.md`](./CUSTOM_SFT.md) mục "Packing không dùng được trên
@@ -319,12 +329,14 @@ làm lại bước 3–6, copy checkpoint từ Drive về rồi chạy lại đ�
 **cùng `RUN_NAME`**:
 
 ```bash
-!mkdir -p /content/hyocr/output
-!rsync -a /content/drive/MyDrive/hyocr_sft/ /content/hyocr/output/
+!mkdir -p /content/hyocr/output /content/hyocr/data/flat
+!rsync -a /content/drive/MyDrive/hyocr_sft/output/ /content/hyocr/output/
+!rsync -a /content/drive/MyDrive/hyocr_sft/flat/   /content/hyocr/data/flat/
 ```
 
-Bước 6 không cần chạy lại nếu bạn cũng đồng bộ `data/packed/` sang Drive — file
-packed chỉ vài MB, đáng để giữ.
+Bước 6 không cần chạy lại: JSONL phẳng chỉ vài MB nên đã được sao lưu sang
+`hyocr_sft/flat/` ngay sau khi convert. Nhưng **tải lại dataset thì vẫn phải** —
+đường dẫn ảnh trong JSONL là tuyệt đối (`/content/dataset/...`).
 
 ## 9. Lấy model ra
 
@@ -346,6 +358,7 @@ gọi `processor.save_pretrained`), đủ để load lại bằng
 | `ModuleNotFoundError` bất kỳ gói nào | đang chạy bằng Python hệ thống chứ không phải venv — thiếu `PYTHON=$VENV/bin/python` (và `TORCHRUN=...` khi train) |
 | `pick_flash_attn.py` báo không có wheel nào | nền tảng lạ (aarch64, cp313 mới) — build from source là đường duy nhất |
 | `RuntimeError: Default process group has not been initialized` | chạy `python train/train_hunyuan.py` trực tiếp. Phải qua `torchrun` (script đã lo), vì `train_hunyuan.py:182` gọi `torch.distributed.get_rank()` |
-| Pack ra 0 dòng | đường dẫn ảnh trong `data/raw/*.jsonl` là tuyệt đối của máy cũ — phải chạy lại converter trên Colab |
+| `FileNotFoundError` một đường dẫn ảnh lúc train | `data/flat/*.jsonl` giữ đường dẫn **tuyệt đối**. Khôi phục JSONL từ Drive mà chưa tải lại dataset về `/content/dataset` thì ảnh không tồn tại — tải dataset trước |
+| `hyocr_sft/flat/` biến mất trên Drive | vòng `rsync --delete` trỏ vào `hyocr_sft/` thay vì `hyocr_sft/output/` — xem cảnh báo ở bước 7 |
 | Eval vỡ ngay batch đầu | đừng bật `--eval_strategy steps`, xem `CUSTOM_SFT.md` mục 4 |
 | Training đứng hình ở bước lưu | đang ghi checkpoint thẳng vào Drive — output phải nằm ở `/content` |

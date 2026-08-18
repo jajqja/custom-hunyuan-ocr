@@ -174,11 +174,16 @@ cả train và eval. Muốn eval loss thì thêm
 chọn checkpoint nào là CER sinh thật, đo sau bằng `eval_checkpoint.py`."""),
     ("code", """import subprocess
 # Đồng bộ output sang Drive mỗi 10 phút để session chết không mất checkpoint.
-subprocess.Popen(f"while true; do rsync -a --delete {WORK}/output/ {DRIVE_DIR}/; "
-                 f"sleep 600; done", shell=True)
-print("rsync nền đã chạy")"""),
+# Đích là $DRIVE_DIR/output/, KHÔNG phải $DRIVE_DIR: `--delete` xoá mọi thứ ở
+# đích mà nguồn không có, nên trỏ vào thư mục gốc sẽ xoá luôn $DRIVE_DIR/flat/
+# vừa sao lưu ở bước 7.
+subprocess.Popen(f"mkdir -p {DRIVE_DIR}/output; "
+                 f"while true; do rsync -a --delete {WORK}/output/ "
+                 f"{DRIVE_DIR}/output/; sleep 600; done", shell=True)
+print("rsync nền đã chạy ->", f"{DRIVE_DIR}/output/")"""),
+    # Đường dẫn viết thẳng: line magic không nội suy $WORK như dòng `!`.
     ("code", """%load_ext tensorboard
-%tensorboard --logdir $WORK/output"""),
+%tensorboard --logdir /content/hyocr/output"""),
     ("code", """!PYTHON=$VENV/bin/python \\
  TORCHRUN=$VENV/bin/torchrun \\
  MODEL_PATH=$MODEL_DIR \\
@@ -190,8 +195,16 @@ print("rsync nền đã chạy")"""),
  SAVE_STEPS=25 \\
      bash scripts/sft_base_1gpu.sh"""),
 
-    ("md", """OOM thì thử theo thứ tự: `TUNE_VISION=False` (đóng băng vision tower, rẻ
-nhất) → hạ `PACK_LEN` một bậc (phải pack lại) → `DEEPSPEED=scripts/zero2.json`."""),
+    ("md", """320 step (1.015 mẫu / 16 accum × 5 epoch). Không có validation trong lúc
+train — `Trainer` chỉ nhận một collator dùng cho cả train và eval. Thêm
+`EVAL_DATA=$WORK/data/flat/validation.jsonl EVAL_STEPS=32` nếu muốn eval loss,
+nhưng thứ quyết định chọn checkpoint là CER sinh thật, đo sau bằng
+`tools/eval_checkpoint.py`.
+
+OOM thì thử theo thứ tự: `TUNE_VISION=False` (đóng băng vision tower, rẻ nhất) →
+hạ `PACK_LEN` xuống 8192 (ở chế độ không pack nó là độ dài tối đa của **một
+trang**, đổi được ngay, không phải xử lý lại dữ liệu) →
+`DEEPSPEED=scripts/zero2.json`."""),
 
     ("md", """## 9. Mất session → chạy lại
 
@@ -199,10 +212,10 @@ Làm lại cell 1–8 (kể cả dựng venv — `/content` đã bị xoá sạc
 checkpoint từ Drive về **trước** khi chạy lại cell train với đúng `RUN_NAME` cũ.
 `train_hunyuan.py:221` tự `resume_from_checkpoint=True` khi thấy `checkpoint-*`
 trong output dir."""),
-    ("code", """!mkdir -p $WORK/output $WORK/data/packed
-!rsync -a $DRIVE_DIR/ $WORK/output/
-!cp $DRIVE_DIR/packed/*.jsonl $WORK/data/packed/ 2>/dev/null
-!ls $WORK/output/$RUN_NAME"""),
+    ("code", """!mkdir -p $WORK/output $WORK/data/flat
+!rsync -a $DRIVE_DIR/output/ $WORK/output/
+!rsync -a $DRIVE_DIR/flat/ $WORK/data/flat/
+!ls $WORK/output/$RUN_NAME && ls $WORK/data/flat"""),
 
     ("md", "## 10. Đẩy model đã train lên HF"),
     ("code", """!$VENV/bin/hf upload $OUTPUT_REPO $WORK/output/$RUN_NAME . \\
