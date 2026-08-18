@@ -1,6 +1,6 @@
 # SFT HunyuanOCR-1.5 base trên dữ liệu tiếng Việt — 1 GPU 80GB
 
-Runbook cho fork này. Nguồn dữ liệu: `makedata/hf_upload` (1.007 train / 120
+Runbook cho fork này. Nguồn dữ liệu: `makedata/hf_upload` (1.015 train / 112
 validation, 4 config: GCN, Documents, Others, Handwriting).
 
 Chạy trên Google Colab thì xem [`COLAB.md`](./COLAB.md) — cùng quy trình nhưng
@@ -62,22 +62,33 @@ hf download tencent/HunyuanOCR --local-dir ./HunyuanOCR
 export MODEL_PATH=$PWD/HunyuanOCR
 ```
 
-## 1. Chuyển dữ liệu sang định dạng raw JSONL
+## 1. Chuyển dữ liệu sang JSONL
 
 ```bash
 python tools/makedata_to_hyocr.py \
     --root /home/jaqja/New_AI/makedata/hf_upload \
-    --prompt-file /home/jaqja/New_AI/makedata/ocr_prompt.md \
-    --out-dir ./data/raw \
-    --data-list ./data/data_list.txt
+    --prompt-file ./configs/ocr_prompt.md \
+    --out-dir ./data/flat --flat
 ```
 
-Sinh ra `data/raw/train.jsonl` (1.007 dòng) và `data/raw/validation.jsonl`
-(120 dòng), mỗi dòng:
+Sinh ra `data/flat/train.jsonl` (1.015 dòng) và `data/flat/validation.jsonl`
+(112 dòng), mỗi dòng:
+
+```json
+{"image": "/abs/000.jpg", "question": "<prompt>", "answer": "<markdown>"}
+```
+
+Đó là schema `VLDataset` đọc trực tiếp khi `is_packed=False`. Bỏ `--flat` và thêm
+`--data-list ./data/data_list.txt` thì ra định dạng cho bước pack — chỉ cần nếu
+chạy trên bản transformers prerelease:
 
 ```json
 {"img_path_sh": "/abs/000.jpg", "conv": [{"question": "<prompt>", "answer": "<markdown>"}]}
 ```
+
+Prompt lấy từ `configs/ocr_prompt.md` trong repo này, không phải
+`makedata/ocr_prompt.md`: prompt là cấu hình của lần train nên phải version cùng
+code, và phải khớp từng chữ với prompt lúc suy luận.
 
 > **`docs/data_format.md` của upstream mô tả sai.** Doc ghi schema
 > `{"image_path": [...], "conversations": [{"from","value"}]}` và packed output
@@ -91,7 +102,12 @@ Prompt nằm ở `question`, không phải `system`: hàm pack không chuyển
 `--system-prompt` vào bản ghi packed, nên system prompt được **tính token lúc
 pack rồi biến mất lúc train** — đặt prompt ở đó là lệch dữ liệu.
 
-## 2. Pack
+## 2. Pack — bỏ qua trên transformers phát hành
+
+> **Bước này chỉ chạy được trên bản transformers prerelease đã ngừng dùng.** Trên
+> transformers ≥ 5.13, packing hỏng âm thầm (mọi pack rỗng) — xem mục "Packing
+> không dùng được trên transformers phát hành" ở dưới. Đường đang dùng là JSONL
+> phẳng: `makedata_to_hyocr.py --flat` rồi `PACKING=0`. Giữ mục này để tham chiếu.
 
 ```bash
 MODEL_PATH=$MODEL_PATH \
@@ -128,10 +144,16 @@ nhỏ hơn khi pack — đổi lại chữ nhỏ trên giấy sẽ mờ đi.
 
 ```bash
 MODEL_PATH=$MODEL_PATH \
-TRAIN_DATA=./data/packed/train_16384.jsonl \
+TRAIN_DATA=./data/flat/train.jsonl \
+PACKING=0 \
+GRAD_ACCUM=16 \
 PACK_LEN=16384 \
     bash scripts/sft_base_1gpu.sh
 ```
+
+`PACK_LEN` ở chế độ không pack là độ dài tối đa của **một trang**, không phải của
+một pack. `GRAD_ACCUM=16` để batch hiệu dụng xấp xỉ mức khi còn pack (một pack
+16384 token chứa cỡ 4 trang × 4 accum).
 
 Khác gì so với `scripts/sft_base.sh`:
 
@@ -183,15 +205,15 @@ PACKING=0 TRAIN_DATA=./data/flat/train.jsonl GRAD_ACCUM=16 \
 
 Chọn `EVAL_STEPS` theo số step một epoch, không theo con số tròn:
 
-| `EVAL_STEPS` | Số lần eval (315 step) | Thêm bao lâu |
+| `EVAL_STEPS` | Số lần eval (320 step) | Thêm bao lâu |
 |---:|---:|---|
 | 16 | 20 | ~20 phút |
 | **32** | **10** (2 lần/epoch) | **~10 phút** |
-| 63 | 5 (1 lần/epoch) | ~5 phút |
+| 64 | 5 (1 lần/epoch) | ~5 phút |
 
-Mỗi lần eval là 120 forward pass ở batch 1, cỡ **40–60 giây**. `EVAL_STEPS=32`
+Mỗi lần eval là 112 forward pass ở batch 1, cỡ **40–60 giây**. `EVAL_STEPS=32`
 cho đủ 10 điểm để nhìn ra chỗ val loss quay đầu — đó là toàn bộ lý do bật eval
-với bộ 1.007 mẫu, nơi 5 epoch rất dễ overfit. Dày hơn 16 chỉ tốn thời gian.
+với bộ 1.015 mẫu, nơi 5 epoch rất dễ overfit. Dày hơn 16 chỉ tốn thời gian.
 
 Muốn `--load_best_model_at_end` thì `SAVE_STEPS` phải là bội của `EVAL_STEPS`
 (đặt cả hai bằng 32); script không bật sẵn.
@@ -328,34 +350,38 @@ PACKING=0 TRAIN_DATA=./data/flat/train.jsonl GRAD_ACCUM=16 \
 tiếp khi `is_packed=False`. `GRAD_ACCUM=16` để batch hiệu dụng xấp xỉ mức cũ
 (một pack 16384 token chứa cỡ 4 trang, giờ mỗi step một trang).
 
-Với 1.007 mẫu thì phần lãng phí do padding không đáng kể — packing là tối ưu
+Với 1.015 mẫu thì phần lãng phí do padding không đáng kể — packing là tối ưu
 throughput cho vòng train cỡ triệu mẫu.
 
-### Đường ghim: `transformers@82a06db` (khuyến nghị để train)
+### Ghim `transformers@82a06db` thì sao? — đã thử, không đáng
 
-Bản prerelease mà Tencent phát triển trên đó — `82a06db03535c49aa987719ed0746a76093b1ec4`,
-"hunyuan vision prerelease", 20/11/2025, version `4.57.1.dev0`:
+`82a06db03535c49aa987719ed0746a76093b1ec4` ("hunyuan vision prerelease",
+20/11/2025, `4.57.1.dev0`) là bản Tencent phát triển trên đó, và nó có lại bốn
+thứ mà bản phát hành đã bỏ:
 
 | | bản phát hành ≥ 5.13 | `@82a06db` |
 |---|---|---|
-| `apply_rotary_pos_emb_xdrope` | không export | **có** (`modeling_hunyuan_vl.py:457`) |
+| `apply_rotary_pos_emb_xdrope` | không export | có (`:457`) |
 | bố cục module | `model.model.vision_tower` | `model.vit` |
-| processor trả `position_ids` | không | **có** |
-| `rope_scaling` khi load | đổi tên thành `rope_parameters` / `mrope_section` | **giữ nguyên** `type: xdrope` |
+| processor trả `position_ids` | không | có |
 | `TrainingArguments.warmup_ratio` | bỏ | có |
-| packing | không dùng được | **dùng được** |
 
-Ghim bản này thì monkeypatch attention của upstream áp dụng lại được, nên
-`PACKING=1` chạy đúng và không cần bản vá nào trong `train/`. Các sửa đổi ở
-`train/trainer.py` và `train/train_hunyuan.py` đều tương thích hai chiều — chúng
-chỉ *thêm* đường lùi cho bản mới, không đổi hành vi trên bản ghim.
+Nhưng nó **thiếu một tên khác**, và đó là chỗ chết:
 
-```bash
-uv pip install "git+https://github.com/huggingface/transformers@82a06db03535c49aa987719ed0746a76093b1ec4"
+```
+ImportError: cannot import name 'HunYuanVLVisionTransformer' from
+transformers.models.hunyuan_vl.modeling_hunyuan_vl
+Did you mean: 'HunYuanVisionTransformer'?
 ```
 
-`transformers 4.57` chốt `tokenizers<0.23`, nên cài transformers **trước** rồi để
-resolver tự chọn `tokenizers`; đừng ghim tay bản mới hơn.
+Bản ghim gọi vision tower là `HunYuanVisionTransformer`; `train/trainer.py:16`
+import `HunYuanVLVisionTransformer`. Tức code train của upstream **không chạy
+được trên chính bản mà nó được viết cho** mà không sửa. Ghim để tránh phải vá,
+rồi vẫn phải vá — nên không ghim.
+
+Kết luận: chạy transformers phát hành, `PACKING=0`. Với 1.015 mẫu thì phần lãng
+phí do padding không đáng kể, packing là tối ưu throughput cho vòng train cỡ
+triệu mẫu.
 
 Prompt dùng cho lần train nào thì lưu kèm lần đó — `configs/ocr_prompt.md` là bản
 đang dùng. Nó phải **khớp từng chữ** với prompt lúc suy luận: model chỉ thấy đúng
@@ -408,7 +434,7 @@ patch sinh ra để làm.
 
 ## 6. Ghi chú về quy mô
 
-Bộ này có 1.007 trang train. Recipe của Tencent dùng ~1M pack cho pretrain và
+Bộ này có 1.015 trang train. Recipe của Tencent dùng ~1M pack cho pretrain và
 14,7k pack cho domain finetune, tức là ta ít hơn khoảng hai bậc. Kỳ vọng thực tế
 là **thích nghi domain** (đúng bố cục biểu mẫu VN, đúng quy ước Markdown trong
 `ocr_prompt.md`), không phải nâng năng lực OCR tổng quát. Nếu loss train tụt

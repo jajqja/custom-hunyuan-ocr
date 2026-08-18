@@ -114,13 +114,11 @@ print(json.dumps(plan, indent=2))
 
 pipi(f"torch=={plan['torch']}", "torchvision", "--index-url", plan["index_url"])
 pipi(plan["wheel"])
-# Bản prerelease Tencent phát triển trên đó (4.57.1.dev0). Ghim để giữ được
-# packing, xdrope và bố cục module gốc. Cài TRƯỚC các gói khác: 4.57 chốt
-# tokenizers<0.23, để resolver tự chọn thay vì ghim tay.
-pipi("git+https://github.com/huggingface/transformers"
-     "@82a06db03535c49aa987719ed0746a76093b1ec4")
-pipi("accelerate", "deepspeed", "safetensors", "datasets",
-     "sentencepiece", "pillow", "opencv-python-headless", "numpy",
+# `hunyuan_vl` chỉ có từ transformers 5.13.0 (5.11/5.12 chưa có). Đừng ghim
+# @82a06db: bản đó thiếu HunYuanVLVisionTransformer nên train/trainer.py không
+# import được — xem CUSTOM_SFT.md.
+pipi("transformers>=5.13", "accelerate", "deepspeed", "safetensors", "datasets",
+     "sentencepiece", "tokenizers", "pillow", "opencv-python-headless", "numpy",
      "einops", "tensorboard", "tqdm", "binpacking", "lmdb", "huggingface_hub>=0.34")
 print("venv xong")"""),
 
@@ -149,36 +147,31 @@ code, và phải khớp từng chữ với prompt lúc suy luận — model ch�
 chuỗi prompt trong suốt quá trình train."""),
     ("code", """print(open(f"{WORK}/configs/ocr_prompt.md", encoding="utf-8").read())"""),
 
-    ("md", "## 7. Convert sang raw JSONL"),
+    ("md", """## 7. Convert sang JSONL phẳng
+
+`--flat` xuất `{"image","question","answer"}` — schema mà `VLDataset` đọc trực
+tiếp khi `is_packed=False`. Không có bước pack: packing chỉ chạy được trên bản
+transformers prerelease đã ngừng dùng, và với 1.015 mẫu thì nó không đáng."""),
     ("code", """!$VENV/bin/python tools/makedata_to_hyocr.py \\
     --root $DATA_DIR \\
     --prompt-file $WORK/configs/ocr_prompt.md \\
-    --out-dir $WORK/data/raw \\
-    --data-list $WORK/data/data_list.txt
+    --out-dir $WORK/data/flat --flat
 # cột "thiếu ảnh" phải là 0"""),
-
-    ("md", """## 8. Pack
-
-`NUM_PROCESSES=2` chứ không phải 32: Colab chỉ có ~12 vCPU và mỗi process load
-một processor riêng. Mất 10–20 phút vì phải mở từng ảnh để đếm vision token."""),
-    ("code", """!PYTHON=$VENV/bin/python \\
- MODEL_PATH=$MODEL_DIR \\
- INPUT_LIST=$WORK/data/data_list.txt \\
- PACK_OUTPUT=$WORK/data/packed/train_$PACK_LEN.jsonl \\
- PACK_LEN=$PACK_LEN \\
- NUM_PROCESSES=2 THREADS_PER_PROCESS=4 \\
- FOREGROUND=1 \\
-     bash scripts/pack_data.sh"""),
     ("code", """import json
 
-n = t = 0
-for line in open(f"{WORK}/data/packed/train_{PACK_LEN}.jsonl"):
-    p = json.loads(line); n += 1; t += sum(x["num_tokens"] for x in p)
-print(f"{n} pack, trung bình {t/n:.0f} token/pack")
+for sp in ("train", "validation"):
+    rows = [json.loads(l) for l in open(f"{WORK}/data/flat/{sp}.jsonl")]
+    print(f"{sp:11} {len(rows):5} mẫu | nhãn rỗng "
+          f"{sum(not r['answer'].strip() for r in rows)}")
 
-!mkdir -p $DRIVE_DIR/packed && cp $WORK/data/packed/*.jsonl $DRIVE_DIR/packed/"""),
+!mkdir -p $DRIVE_DIR/flat && cp $WORK/data/flat/*.jsonl $DRIVE_DIR/flat/"""),
 
-    ("md", "## 9. Train"),
+    ("md", """## 8. Train
+
+Không có validation trong lúc train: `Trainer` chỉ nhận **một** collator dùng cho
+cả train và eval. Muốn eval loss thì thêm
+`EVAL_DATA=$WORK/data/flat/validation.jsonl EVAL_STEPS=32`. Nhưng thứ quyết định
+chọn checkpoint nào là CER sinh thật, đo sau bằng `eval_checkpoint.py`."""),
     ("code", """import subprocess
 # Đồng bộ output sang Drive mỗi 10 phút để session chết không mất checkpoint.
 subprocess.Popen(f"while true; do rsync -a --delete {WORK}/output/ {DRIVE_DIR}/; "
@@ -189,9 +182,9 @@ print("rsync nền đã chạy")"""),
     ("code", """!PYTHON=$VENV/bin/python \\
  TORCHRUN=$VENV/bin/torchrun \\
  MODEL_PATH=$MODEL_DIR \\
- TRAIN_DATA=$WORK/data/packed/train_$PACK_LEN.jsonl \\
- PACKING=1 \\
- GRAD_ACCUM=4 \\
+ TRAIN_DATA=$WORK/data/flat/train.jsonl \\
+ PACKING=0 \\
+ GRAD_ACCUM=16 \\
  PACK_LEN=$PACK_LEN \\
  RUN_NAME=$RUN_NAME \\
  SAVE_STEPS=25 \\
@@ -200,7 +193,7 @@ print("rsync nền đã chạy")"""),
     ("md", """OOM thì thử theo thứ tự: `TUNE_VISION=False` (đóng băng vision tower, rẻ
 nhất) → hạ `PACK_LEN` một bậc (phải pack lại) → `DEEPSPEED=scripts/zero2.json`."""),
 
-    ("md", """## 10. Mất session → chạy lại
+    ("md", """## 9. Mất session → chạy lại
 
 Làm lại cell 1–8 (kể cả dựng venv — `/content` đã bị xoá sạch), rồi kéo
 checkpoint từ Drive về **trước** khi chạy lại cell train với đúng `RUN_NAME` cũ.
@@ -211,7 +204,7 @@ trong output dir."""),
 !cp $DRIVE_DIR/packed/*.jsonl $WORK/data/packed/ 2>/dev/null
 !ls $WORK/output/$RUN_NAME"""),
 
-    ("md", "## 11. Đẩy model đã train lên HF"),
+    ("md", "## 10. Đẩy model đã train lên HF"),
     ("code", """!$VENV/bin/hf upload $OUTPUT_REPO $WORK/output/$RUN_NAME . \\
     --repo-type model --private"""),
 ]
