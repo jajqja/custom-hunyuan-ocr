@@ -449,3 +449,24 @@ là **thích nghi domain** (đúng bố cục biểu mẫu VN, đúng quy ước
 `ocr_prompt.md`), không phải nâng năng lực OCR tổng quát. Nếu loss train tụt
 nhanh mà chất lượng trên validation không lên, đó là overfit — hạ `EPOCHS`
 xuống 2–3 và/hoặc đóng băng vision tower trước khi nghĩ tới việc đổi LR.
+
+### Train DFlash draft thì sao? — đo rồi, không đáng
+
+`scripts/sft_dflash.sh` (from scratch) và `scripts/sft_dflash_finetune.sh`
+(tiếp tục từ draft có sẵn) train draft model cho speculative decoding. Đã đo
+draft v1 mà HF release ship kèm, trên target đã SFT: **chậm hơn 1,30× ở c=1 và
+1,44× ở c=16** so với không draft. Số đo, phép tính và lý do khác benchmark
+upstream ở [`DEPLOY_VLLM.md`](./DEPLOY_VLLM.md) mục "DFlash: đã đo, chậm hơn".
+
+Nếu vẫn muốn thử train, ba việc phải làm trước:
+
+1. **Packing là bắt buộc.** `train_draft.py:246` và
+   `train_draft_from_dflash.py:269` đặt cứng `PackedVLDataCollator`, không có
+   nhánh không-pack như `train_hunyuan.py`. Nên phải ghim
+   `transformers@82a06db` — và bản ghim vỡ ở `HunYuanVLVisionTransformer` (xem
+   mục trên), phải tra tên class chấp nhận cả hai.
+2. **Target phải là model sẽ serve**, không phải base. Draft khớp phân phối của
+   target nó dự đoán cho; `MODEL_PATH` trỏ sai là acceptance tụt.
+3. **Bản 1 GPU.** Cả hai script dùng `env_common.sh` (InfiniBand),
+   `NPROC_PER_NODE=8`, `packed_max_length 20480`, `SAVE_STEPS 2000`, và có
+   `--warmup_ratio` / `--logging_dir` cần `filter_train_args.py`.

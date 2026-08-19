@@ -317,6 +317,70 @@ Dừng server: `pkill -f "vllm serve"`
 
 ---
 
+## DFlash: đã đo, chậm hơn — đừng bật
+
+`inference/DFlash/serve_DFlash.sh` bật speculative decoding với draft model
+(~350MB) mà HF release ship kèm ở `HunyuanOCR/dflash`. `docs/benchmark.md` của
+upstream ghi **2,14×**. Trên setup này nó **chậm hơn**, đo trên 30 mẫu val,
+target `ck275`, `NUM_SPEC_TOKENS=8`:
+
+| | c=1 | c=16 |
+|---|---|---|
+| không draft | **61 s** (0,49 trang/s) | **9 s** (3,33 trang/s) |
+| DFlash | 79 s (0,38 trang/s) | 13 s (2,31 trang/s) |
+| | chậm 1,30× | chậm 1,44× |
+
+Draft **hoạt động đúng**, không phải cấu hình sai:
+
+```
+Mean acceptance length: 3.93 / 4.02 / 3.58 / 5.91 / 3.49          → ~4,2
+Per-position acceptance: .807 .618 .479 .336 .237 .173 .128 .089 …
+```
+
+Acceptance length ~4 là mức tốt cho speculative decoding. Nhưng vẫn lỗ, vì
+**một forward của draft không rẻ hơn target là bao**:
+
+```
+Detected EAGLE model without its own embed_tokens → Sharing target model embedding weights
+Detected EAGLE model without its own lm_head      → Sharing target model lm_head weights
+```
+
+Draft dùng chung `lm_head` và `embed_tokens` của target. Với vocab lớn thì
+`lm_head` chiếm phần lớn chi phí một forward, nên draft ≈ target về giá. Phép
+tính với `k=8`:
+
+```
+không draft :  3,87 forward target                    -> 3,87 token
+DFlash k=8  :  8 forward draft + 1 forward target     -> 3,87 token
+```
+
+Draft rẻ hơn target 2 lần thì vẫn tương đương 5 "đơn vị target" so với 3,87.
+Hạ `k` không lật được dấu: `k=4` cho acceptance 3,24 với 4+1 forward.
+
+Khác upstream ở chỗ draft của họ được finetune trên **14.7k pack khớp target**
+nên acceptance length cao hơn hẳn. Bộ dữ liệu của fork này ra ~250 pack, ít hơn
+60 lần — không đủ để lật lại con số trên, mà lại phải ghim
+`transformers@82a06db` (packing) + vá `train/trainer.py`
+(`HunYuanVLVisionTransformer` đổi tên) + viết `sft_dflash_finetune_1gpu.sh`.
+Cả hai entry point DFlash đặt cứng `PackedVLDataCollator`, không có nhánh
+không-pack như `train_hunyuan.py`.
+
+Và nó **không lossless tuyệt đối**: CER 0,0390 (DFlash) vs 0,0369 (không draft)
+trên cùng 30 mẫu. Bước verify chạy target trên cả block nên thứ tự cộng dồn
+trong kernel khác decode tuần tự, logit lệch ở chữ số cuối và `argmax` đổi ở vài
+chỗ; `repetition_penalty` phụ thuộc tiền tố đã sinh cũng góp phần. Upstream chỉ
+hứa "total-tokens difference < 0.15%", không hứa giống hệt.
+
+**Đòn bẩy tốc độ thật là continuous batching**, đã có sẵn: 3,33 trang/s ở c=16
+so với 0,49 ở c=1 — gấp 6,8 lần, không cần cấu hình gì thêm. Mốc upstream ở c=1
+là 0,330 (AR) và 0,706 (DFlash); batching vượt cả hai.
+
+Muốn tự đo lại thì bật draft rồi so bốn ô của bảng trên, và **luôn chấm CER kèm
+theo** — hai CER không sát nhau nghĩa là `--speculative-config` sai, số đo thời
+gian khi đó vô nghĩa.
+
+---
+
 ## Vì sao phải vá
 
 Bốn mắt xích, đứt cả bốn vì cùng một nguyên nhân.
