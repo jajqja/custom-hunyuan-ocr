@@ -54,6 +54,10 @@ grad_accum_steps=${GRAD_ACCUM:-4}
 num_epochs=${EPOCHS:-5}
 warmup_ratio=${WARMUP:-0.03}
 save_steps=${SAVE_STEPS:-50}
+# save_total_limit chỉ giữ N checkpoint MỚI NHẤT. Đặt SAVE_STEPS nhỏ + limit 3 thì
+# ba cái sống sót nằm sát nhau ở cuối run và không có gì để chọn giữa chúng. Muốn
+# so được thì đặt SAVE_STEPS = số step một epoch và nâng limit lên bằng số epoch.
+save_limit=${SAVE_LIMIT:-3}
 pack_len=${PACK_LEN:-16384}
 
 # PACKING=0 tắt gộp nhiều trang vào một chuỗi. Bắt buộc trên transformers >= 5.13:
@@ -112,6 +116,7 @@ echo "  lr            : ${lr}"
 echo "  epochs        : ${num_epochs}"
 echo "  batch x accum : ${batch_size} x ${grad_accum_steps}"
 echo "  pack length   : ${pack_len}"
+echo "  save          : mỗi ${save_steps} step, giữ ${save_limit} bản mới nhất"
 echo "  packing       : ${packing}"
 echo "  eval          : ${eval_data:-off}${eval_data:+ mỗi ${eval_steps} step}"
 echo "  tune v/m/l    : ${tune_vision} / ${tune_mlp} / ${tune_llm}"
@@ -136,7 +141,7 @@ args="
     ${eval_flags} \
     --save_strategy steps \
     --save_steps ${save_steps} \
-    --save_total_limit 3 \
+    --save_total_limit ${save_limit} \
     --learning_rate ${lr} \
     --weight_decay 0.01 \
     --warmup_ratio ${warmup_ratio} \
